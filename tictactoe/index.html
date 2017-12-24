@@ -28,10 +28,6 @@
     <button type="button" id="reset">Reset Game</button>
   </div>
 
-  <script>
-    fetch('tic_tac_toe_wasm.wasm')
-      .then(response => response.arrayBuffer())
-      .then(bytes => WebAssembly.instantiate(bytes, {}));
-  </script>
+  <script src="tic_tac_toe_wasm.js" type="text/javascript"></script>
 </body>
 </html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+
+<html>
+<head>
+  <title>Tic Tac Toe</title>
+  <link rel="stylesheet" href="css/index.css" type="text/css">
+</head>
+
+<body>
+  <h1>Tic Tac Toe</h1>
+
+  <div class="container">
+    <ul id="game">
+      <!-- first row -->
+      <li id="cell-0"></li>
+      <li id="cell-1"></li>
+      <li id="cell-2"></li>
+      <!-- second row -->
+      <li id="cell-3"></li>
+      <li id="cell-4"></li>
+      <li id="cell-5"></li>
+      <!-- third row -->
+      <li id="cell-6"></li>
+      <li id="cell-7"></li> 
+      <li id="cell-8"></li>
+    </ul>
+
+    <button type="button" id="reset">Reset Game</button>
+  </div>
+
+  <script>
+    fetch('tic_tac_toe_wasm.wasm')
+      .then(response => response.arrayBuffer())
+      .then(bytes => WebAssembly.instantiate(bytes, {}));
+  </script>
+</body>
+</html>

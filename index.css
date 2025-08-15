@@ -1,0 +1,58 @@
+.wrapper {
+  display: flex;
+  /* This makes elements come after each other */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.links {
+  display: flex;
+  gap: 10px;
+}
+
+.links>a {
+  border: 1px;
+  text-decoration: none;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  margin-top: 50px;
+  text-wrap: wrap;
+  width: 60%;
+}
+
+@media (min-width: 1800px) {
+  .content {
+    width: 50%;
+    margin-left: 25%;
+    margin-right: 25%;
+  }
+}
+
+@media (max-width: 1200px) {
+  .content {
+    width: 80%;
+  }
+}
+
+@media (max-width: 600px) {
+  .content {
+    width: 100%;
+  }
+}
+
+.item {
+  display: flex;
+  color: inherit;
+  flex-direction: row;
+  gap: 20px;
+  border: 1px solid black;
+  text-decoration: none;
+  padding: 20px;
+  margin-top: 5px;
+  margin-bottom: 5px;
+}

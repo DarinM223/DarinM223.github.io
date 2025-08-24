@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 
@@ -7,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title></title>
   <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="static/css/prism.css">
 </head>
 
 <body>
@@ -65,13 +65,13 @@
       <p>When you declare a variable in Rust, the variable “owns” the
       data.</p>
       <div class="sourceCode" id="cb1"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> a <span class="op">=</span> <span class="dt">Box</span><span class="pp">::</span>new(<span class="dv">2</span>)<span class="op">;</span> <span class="co">// a &quot;owns&quot; a heap allocated integer</span></span></code></pre></div>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> a <span class="op">=</span> <span class="dt">Box</span><span class="pp">::</span>new(<span class="dv">2</span>)<span class="op">;</span> <span class="co">// a &quot;owns&quot; a heap allocated integer</span></span></code></pre></div>
       <p>When a variable owns something it can move it to other
       variables using assignment. After giving away its data, the old
       variable cannot access the value anymore, and the new variable is
       the new owner.</p>
       <div class="sourceCode" id="cb2"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mufasa <span class="op">=</span> <span class="dt">Box</span><span class="pp">::</span>new(<span class="st">&quot;king&quot;</span>)<span class="op">;</span> <span class="co">// mufasa is the owner of &quot;king&quot;</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mufasa <span class="op">=</span> <span class="dt">Box</span><span class="pp">::</span>new(<span class="st">&quot;king&quot;</span>)<span class="op">;</span> <span class="co">// mufasa is the owner of &quot;king&quot;</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> scar <span class="op">=</span> mufasa<span class="op">;</span> <span class="co">// the data &quot;king&quot; is moved from mufasa to scar</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="pp">println!</span>(<span class="st">&quot;{}&quot;</span><span class="op">,</span> scar)<span class="op">;</span> <span class="co">// scar is now the owner of &quot;king&quot;</span></span>
@@ -79,7 +79,7 @@
       <p>At the end of the scope where the owner is created, the data is
       destroyed</p>
       <div class="sourceCode" id="cb3"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> a <span class="op">=</span> <span class="dt">Box</span><span class="pp">::</span>new(<span class="dv">2</span>)<span class="op">;</span> <span class="co">// a owns a heap allocated integer</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> <span class="co">// a&#39;s data deallocated here</span></span></code></pre></div>
       <p>Tips &amp; Tricks:</p>
@@ -90,7 +90,7 @@
       topic tries to solve this.</li>
       </ul>
       <div class="sourceCode" id="cb4"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> hello(a<span class="op">:</span> <span class="dt">Box</span><span class="op">&lt;</span><span class="dt">i32</span><span class="op">&gt;</span>) <span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> hello(a<span class="op">:</span> <span class="dt">Box</span><span class="op">&lt;</span><span class="dt">i32</span><span class="op">&gt;</span>) <span class="op">{</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    println(<span class="st">&quot;{:?}&quot;</span><span class="op">,</span> a)<span class="op">;</span> <span class="co">// prints &quot;2&quot;</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
@@ -114,7 +114,7 @@
       code snippet for a linked list:</li>
       </ul>
       <div class="sourceCode" id="cb5"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::</span>mem<span class="op">;</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::</span>mem<span class="op">;</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Link<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">=</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;;</span></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
@@ -146,7 +146,7 @@
       take() method for Options that does the same thing but is less
       verbose:</p>
       <div class="sourceCode" id="cb6"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> Stack<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> Stack<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... other methods</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> pop(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Option</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
@@ -189,13 +189,13 @@
       <p>When you borrow a variable, the owner variable becomes
       inaccessable until the borrowed variable is destroyed.</p>
       <div class="sourceCode" id="cb7"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> y <span class="op">=</span> <span class="op">&amp;</span><span class="kw">mut</span> x<span class="op">;</span> <span class="co">// y borrows the data from x</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="pp">println!</span>(<span class="st">&quot;{}&quot;</span><span class="op">,</span> x)<span class="op">;</span> <span class="co">// ERROR: x no longer has the data, y has it!</span></span></code></pre></div>
       <p>When a borrowed variable is destroyed, it gives back the
       borrowed value back to the owner.</p>
       <div class="sourceCode" id="cb8"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> y <span class="op">=</span> <span class="op">&amp;</span><span class="kw">mut</span> x<span class="op">;</span> <span class="co">// y borrows the data from x</span></span>
@@ -206,7 +206,7 @@
       <p>Because of this, the owner has to live longer than the
       borrower</p>
       <div class="sourceCode" id="cb9"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x<span class="op">:</span> <span class="op">&amp;</span><span class="dt">i32</span><span class="op">;</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">mut</span> x<span class="op">:</span> <span class="op">&amp;</span><span class="dt">i32</span><span class="op">;</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> y <span class="op">=</span> <span class="dv">3</span><span class="op">;</span></span>
@@ -226,7 +226,7 @@
       reference</li>
       </ul>
       <div class="sourceCode" id="cb10"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    Hello<span class="op">,</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    Bye<span class="op">,</span></span>
 <span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
@@ -244,7 +244,7 @@
       variable</li>
       </ul>
       <div class="sourceCode" id="cb11"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    Hello<span class="op">,</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    Bye<span class="op">,</span></span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
@@ -259,7 +259,7 @@
       with ‘ref’ to borrow the match variable instead of moving</li>
       </ul>
       <div class="sourceCode" id="cb12"><pre
-      class="sourceCode rust"><code class="sourceCode rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> State <span class="op">{</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    Hello(<span class="dt">String</span>)<span class="op">,</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    Bye<span class="op">,</span></span>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
@@ -280,6 +280,8 @@
       <p>TODO: write this later</p>
     </div>
   </div>
+  <script src="static/js/prism.js"></script>
 </body>
+
 
 </html>

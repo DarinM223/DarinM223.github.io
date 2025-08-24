@@ -1,0 +1,252 @@
+/* PrismJS - used for code highlighting */
+
+[class*="language-"] ::selection {
+  color: #000;
+  background: hsl(214, 100%, 85%);
+  text-shadow: none;
+}
+
+pre[class*="language-"] {
+  margin: 0;
+  background-color: transparent;
+
+  /* Allow space for an overflow ellipsis */
+  padding-right: 0.5rem;
+
+  /* Allow space for SVG "tear off strip" */
+  background-origin: border-box;
+  border-left: 1.5rem solid transparent;
+  background-size: 120rem 4rem;
+  /* Single line does not sit on stripes */
+  background-position: top -1.2rem left 0;
+
+  /* Allow horizontal resizing - could be adjusted to allow vertical resizing too */
+  position: relative;
+  resize: horizontal;
+  min-width: calc(100% - 3rem);
+
+  transition: box-shadow .3s ease-out;
+}
+
+code[class*="language-"] {
+  font-family: monospace, monospace;
+  text-shadow: 0 1px var(--textShadow);
+  letter-spacing: 0.01em;
+  text-align: left;
+  white-space: pre;
+  word-spacing: normal;
+  word-break: normal;
+
+  /* Safari requirement for contenteditable */
+  word-wrap: normal;
+  line-height: 2;
+  tab-size: 2;
+  hyphens: none;
+}
+
+pre>code[class*="language-"],
+pre[class*="language-"]>code {
+  display: block;
+  padding: 0.75rem 0;
+
+  /* Use an ellipsis to indicate code is wider than the display area */
+  text-overflow: ellipsis;
+}
+
+pre:hover>code[class*="language-"],
+pre:focus-within>code[class*="language-"] {
+  outline: none;
+  text-overflow: inherit;
+}
+
+/* Inline code only */
+:not(pre)>code[class*="language-"] {
+  font-size: inherit;
+  background-position: top right;
+  background-size: auto 4rem;
+  padding: 0.125em 0.25em;
+  white-space: normal;
+  word-wrap: nowrap;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.entity {
+  cursor: help;
+}
+
+.namespace {
+  opacity: 0.7;
+}
+
+/* Default colors (Light mode) */
+:not(pre)>code[class*="language-"],
+pre[class*="language-"] {
+  --color: #33a;
+  --textShadow: #fff;
+  --comment: #6e6e6e;
+  --punctuation: #4e4e4e;
+  --property: #905;
+  --operator: #70b;
+  --selector: #487b00;
+  --url: #8d6640;
+  --urlBg: hsla(0, 0%, 100%, .5);
+  --boolean: #905;
+  --atrule: #0075a8;
+  --keyword: #0075a8;
+  --function: #c93654;
+  --regex: #860;
+  --focusOutline: hsla(214, 100%, 85%, 1);
+}
+
+
+/* If the OS has dark mode set then... */
+/* Change dark to light to test */
+
+@media (prefers-color-scheme: dark) {
+
+  body:not([data-lightMode="light"]) code[class*="language-"]:not([contenteditable]),
+  body:not([data-lightMode="light"]) pre[class*="language-"] {
+    --color: #6ae;
+    --textShadow: #000;
+
+    --comment: #9ab;
+    --punctuation: #ccc;
+    --property: #e70;
+    --operator: #d7f;
+    --selector: #8b2;
+    --url: #cde;
+    --urlBg: rgba(0, 0, 0, .5);
+    --boolean: #a8f;
+    --atrule: #ffb;
+    --keyword: #fe6;
+    --function: #f55;
+    --regex: #f91;
+
+    --focusOutline: hsla(214, 100%, 85%, .6);
+  }
+}
+
+/* Manual switch mode - where implemented */
+body[data-lightMode="dark"] code[class*="language-"]:not([contenteditable]),
+body[data-lightMode="dark"] pre[class*="language-"] {
+
+  /* Exactly the same as prefers-color-scheme: dark */
+  --color: #6ae;
+  --textShadow: #000;
+
+  --comment: #9ab;
+  --punctuation: #ccc;
+  --property: #e70;
+  --operator: #d7f;
+  --selector: #8b2;
+  --url: #cde;
+  --urlBg: rgba(0, 0, 0, .5);
+  --boolean: #8af;
+  --atrule: #ffb;
+  --keyword: #fe6;
+  --function: #f55;
+  --regex: #f91;
+
+  --focusOutline: hsla(214, 100%, 85%, .6);
+}
+
+
+
+code[class*="language-"],
+pre[class*="language-"] {
+  color: var(--color);
+  text-shadow: 0 1px var(--textShadow);
+}
+
+/* Background image is applied to the pre element on blocks, mainly because it is cropped when applied to the code element. */
+:not(pre)>code[class*="language-"],
+pre[class*="language-"] {
+  background-image: var(--codeBgImg);
+}
+
+pre[class*="language-"]:focus-within {
+  outline-offset: calc(-0.25rem - 1px);
+  z-index: 5;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--comment);
+}
+
+.token.punctuation {
+  color: var(--punctuation);
+}
+
+.token.property,
+.token.symbol,
+.token.tag,
+.token.constant,
+.token.deleted {
+  color: var(--property);
+}
+
+.token.boolean,
+.token.number {
+  color: var(--boolean);
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: var(--selector);
+}
+
+.token.operator {
+  color: var(--operator);
+}
+
+.token.url,
+.token.entity,
+.language-css .token.string,
+.style .token.string {
+  color: var(--url);
+  background-color: var(--urlBg);
+}
+
+.token.atrule,
+.token.attr-value {
+  color: var(--atrule);
+}
+
+.token.keyword {
+  color: var(--keyword);
+}
+
+.token.function {
+  color: var(--function);
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: var(--regex);
+}
+
+
+
+@media print {
+
+  code[class*="language-"],
+  pre[class*="language-"] {
+    text-shadow: none;
+  }
+}

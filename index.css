@@ -36,6 +36,11 @@
 
 }
 
+.about {
+  margin-top: 20px;
+  text-align: center;
+}
+
 .wrapper {
   display: flex;
   /* This makes elements come after each other */
@@ -114,4 +119,13 @@ div.sourceCode {
   margin-bottom: 5px;
   transition: 0.3s;
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.item > .date {
+  flex-grow: 1;
+}
+
+.item > .title {
+  float: center;
+  flex-grow: 2.5;
 }

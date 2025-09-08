@@ -553,7 +553,7 @@ end
 ```
 
 There is one final thing we want to do before translating back to C++.
-Let's look a the datatypes for `K` and `K'` again:
+Let's look at the datatypes for `K` and `K'` again:
 
 ```sml
 datatype K' =
@@ -583,7 +583,7 @@ of the recursive free variables for `K'` and model it as a stack of frames.
 The stack after popping the topmost frame off of it is the free variable `k'`
 for the topmost continuation.
 Pushing a frame to the stack is the same as creating a closure that wraps
-the existing closure as a free variable. The cases `K'_Convert` and `K_Lam1`
+the existing closure as a free variable. The `K` type can also be modeled as a stack in the same way. The cases `K'_Convert` and `K_Lam1`
 are the cases where the `K` or `K'` stack is empty.
 
 This stack method can be efficiently modeled in C++
@@ -681,3 +681,93 @@ and applyK [] value k' =
 
 Finally, `convertDefunc` becomes `val convertDefunc: L.exp -> exp = fn e => go e [] []` since it is called with both stacks empty initially.
 
+The first thing when translating our Standard ML code to C++ is translating
+the algebraic data types for the continuations. I want to mostly use
+modern C++ for this project so I use `std::variant` over C-style unions:
+
+```cpp
+struct KFrame;
+struct K2Frame;
+
+using K = std::vector<KFrame>;
+using K2 = std::vector<K2Frame>;
+
+struct K2_Lam1 {
+  K k;
+  std::string v;
+};
+
+struct K2_Lam2 {
+  std::string f, v;
+  std::unique_ptr<Exp> body;
+};
+
+struct K2_App1 {
+  std::string r, f;
+  Value x;
+};
+
+struct K2_Bop1 {
+  std::string r;
+  ast::Bop bop;
+  Value x, y;
+};
+
+struct K2_If1 {
+  ast::Exp &t;
+  ast::Exp &f;
+  std::string j, p;
+  Value c;
+};
+
+struct K2_If2 {
+  ast::Exp &f;
+  std::string j, p;
+  Value c;
+  std::unique_ptr<Exp> rest;
+};
+
+struct K2_If3 {
+  std::unique_ptr<Exp> t;
+  std::string j, p;
+  Value c;
+  std::unique_ptr<Exp> rest;
+};
+
+struct K2Frame : public std::variant<K2_Lam1, K2_Lam2, K2_App1, K2_Bop1, K2_If1,
+                                     K2_If2, K2_If3> {
+  using variant::variant;
+};
+
+struct K_App1 {
+  ast::Exp &x;
+};
+
+struct K_App2 {
+  Value f;
+};
+
+struct K_Bop1 {
+  ast::Exp &y;
+  ast::Bop bop;
+};
+
+struct K_Bop2 {
+  Value x;
+  ast::Bop bop;
+};
+
+struct K_If1 {
+  ast::Exp &t;
+  ast::Exp &f;
+};
+
+struct K_If2 {
+  std::string j;
+};
+
+struct KFrame
+    : public std::variant<K_App1, K_App2, K_Bop1, K_Bop2, K_If1, K_If2> {
+  using variant::variant;
+};
+```

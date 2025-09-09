@@ -682,8 +682,9 @@ and applyK [] value k' =
 Finally, `convertDefunc` becomes `val convertDefunc: L.exp -> exp = fn e => go e [] []` since it is called with both stacks empty initially.
 
 The first thing when translating our Standard ML code to C++ is translating
-the algebraic data types for the continuations. I want to mostly use
-modern C++ for this project so I use `std::variant` over C-style unions:
+the algebraic data types for the continuations. This can be done by encoding every data constructor as a C++ struct, and encoding `KFrame` and `K2Frame` as
+a `std::variant` of the structs. Then `K` is an alias for a `std::vector` of `KFrame`s and `K2` is an alias for a `std::vector` of `K2Frame`s.
+The translated code for the data types is shown below:
 
 ```cpp
 struct KFrame;
@@ -770,4 +771,33 @@ struct KFrame
     : public std::variant<K_App1, K_App2, K_Bop1, K_Bop2, K_If1, K_If2> {
   using variant::variant;
 };
+```
+
+Now we need to encode the three tail recursive functions `applyK`, `applyK'` and `go` into a single loop body. We do this by writing an infinite loop
+and having a switch inside that dispatches to the right label:
+
+```cpp
+std::unique_ptr<Exp> convert(ast::Exp &root) {
+  // ... Combined parameters for apply_k2, apply_k, and go normalized ...
+
+  enum { APPLY_K2, APPLY_K, GO } dispatch = GO;
+
+  while (true) {
+    switch (dispatch) {
+    case APPLY_K2: {
+      // ... translated code for function `applyK'` ...
+      break;
+    }
+    case APPLY_K: {
+      // ... translated code for function `applyK` ...
+      break;
+    }
+    case GO: {
+      // ... translated code for function `go` ...
+      break;
+    }
+    }
+  }
+  return nullptr;
+}
 ```

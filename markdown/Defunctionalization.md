@@ -801,3 +801,23 @@ std::unique_ptr<Exp> convert(ast::Exp &root) {
   return nullptr;
 }
 ```
+
+When tail calling, the function frame in the stack gets popped before jumping
+to the next function, so everything outside of the parameters to the tail call is "forgotten". Because of that, we only need to define a union of
+all function parameters as variables outside the loop and when doing a tail call we destructively modify the variables that are the parameters and set
+the dispatch to the label of the next function.
+
+* `go` takes in a `ast::Exp*` (we do not need to own the passed in AST expression), `K`, and `K2`
+* `applyK'` takes in a `K2` and a `std::unique_ptr<anf::Exp>`
+* `applyK` takes in a `K`, `anf::Value`, and `K2`
+
+The union of these parameters is a `ast::Exp*`, `K`, `K2`, `std::unique_ptr<anf::Exp>`, and a `Value`. So these variables are
+defined outside the infinite loop:
+
+```cpp
+ast::Exp *go_exp = &root;
+std::unique_ptr<Exp> k2_exp;
+K k;
+K2 k2;
+Value value;
+```

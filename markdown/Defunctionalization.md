@@ -804,7 +804,7 @@ std::unique_ptr<Exp> convert(ast::Exp &root) {
 
 When tail calling, the function frame in the stack gets popped before jumping
 to the next function, so everything outside of the parameters to the tail call is "forgotten". Because of that, we only need to define a union of
-all function parameters as variables outside the loop and when doing a tail call we destructively modify the variables that are the parameters and set
+all function parameters as variables outside the loop and when doing a tail call we destructively overwrite the variables that are the parameters and set
 the dispatch to the label of the next function.
 
 * `go` takes in a `ast::Exp*` (we do not need to own the passed in AST expression), `K`, and `K2`
@@ -816,8 +816,177 @@ defined outside the infinite loop:
 
 ```cpp
 ast::Exp *go_exp = &root;
-std::unique_ptr<Exp> k2_exp;
+std::unique_ptr<anf::Exp> k2_exp;
 K k;
 K2 k2;
 Value value;
+```
+
+Now to handle the cases for `applyK`, `applyK'`, and `go`. Let's start
+with `go`. The body for `go` simply visits the `go_exp` variable
+and handles every possible expression type:
+
+```cpp
+case GO:
+  std::visit(
+      overloaded{
+          [&](ast::IntExp &exp) {
+            value = IntValue{exp.value};
+            dispatch = APPLY_K;
+          },
+          [&](ast::VarExp &exp) {
+            value = VarValue{exp.name};
+            dispatch = APPLY_K;
+          },
+          // ... rest of the cases ...
+      },
+      *go_exp);
+  break;
+```
+
+The first two cases are filled in, which correspond to the equivalent
+code in Standard ML:
+
+```sml
+  L.Int i => applyK k (Int i) k'
+| L.Var v => applyK k (Var v) k'
+```
+
+`k` and `k'` are not changed in the function so they are not modified. The `value`
+variable is overwritten to `IntValue` or `VarValue`. Then we set dispatch to `APPLY_K` to simulate "calling" the
+`applyK` function since the switch statement will jump to the `APPLY_K` label when the code goes back around to the start of the loop.
+
+Let's apply the same process to the `LamExp` branch:
+
+```sml
+| L.Lam (v, body) => go body (K'_Lam1 {k = k, v = v} :: k') []
+```
+
+Since `go` is called recursively inside `go`, `dispatch` doesn't need to be modified.
+However `go_exp`, `k`, and `k'` need to be modified.
+First we set `go_exp` to the expression's body as a pointer. Then we swap the `k` variable with an empty vector and put its old value into `oldK`. We mentioned earlier that we will convert consing onto a list in Standard ML to pushing to the end of a vector in C++ so we move `oldK` into a `K2_Lam1` type and then push it to the back of `k2`.
+We can do this without having to construct an intermediate struct using
+`.emplace_back()` and `std::in_place_type`:
+
+```cpp
+[&](ast::LamExp &exp) {
+  go_exp = exp.body.get();
+  K oldK;
+  k.swap(oldK);
+  k2.emplace_back(std::in_place_type<K2_Lam1>, std::move(oldK),
+                  exp.param);
+},
+```
+
+The rest of the cases set `go_exp` to an expression child, push to
+the back of `k` and recurse with `go`:
+
+```sml
+| L.App (f, x) => go f k' (K_App1 {x = x} :: k)
+| L.Bop (bop, x, y) => go x k' (K_Bop1 {y = y, bop = bop} :: k)
+| L.If (c, t, f) => go c k' (K_If1 {t = t, f = f} :: k)
+```
+
+```cpp
+[&](ast::AppExp &exp) {
+  go_exp = exp.fn.get();
+  k.emplace_back(std::in_place_type<K_App1>, *exp.arg);
+},
+[&](ast::BopExp &exp) {
+  go_exp = exp.arg1.get();
+  k.emplace_back(std::in_place_type<K_Bop1>, *exp.arg2, exp.bop);
+},
+[&](ast::IfExp &exp) {
+  go_exp = exp.cond.get();
+  k.emplace_back(std::in_place_type<K_If1>, *exp.then, *exp.els);
+},
+```
+
+For the `applyK` branch, we first check if `k` is empty.
+If it is, they we handle the empty list case:
+
+```sml
+applyK [] value k' = applyK' k' (Halt value)
+```
+Otherwise we pop the last frame of the vector and handle all the possible
+`KFrame` variants with `std::visit`. This is equivalent to the
+Standard ML code that pattern matches on the list of frames:
+
+```cpp
+case APPLY_K: {
+  if (k.empty()) {
+    k2_exp = make(HaltExp{value});
+    dispatch = APPLY_K2;
+    continue;
+  }
+  auto frame = std::move(k.back());
+  k.pop_back();
+  std::visit(
+      overloaded{
+        // ... cases for KFrame variants ...
+      },
+      frame);
+  break;
+}
+```
+
+```cpp
+case APPLY_K: {
+  if (k.empty()) {
+    k2_exp = make(HaltExp{value});
+    dispatch = APPLY_K2;
+    continue;
+  }
+  auto frame = std::move(k.back());
+  k.pop_back();
+  std::visit(
+      overloaded{
+          [&](K_App1 &frame) {
+            go_exp = &frame.x;
+            k.emplace_back(std::in_place_type<K_App2>, std::move(value));
+            dispatch = GO;
+          },
+          [&](K_App2 &frame) {
+            std::visit(overloaded{[&](VarValue &f) {
+                                    auto r = fresh();
+                                    k2.emplace_back(
+                                        std::in_place_type<K2_App1>, r,
+                                        f.var, std::move(value));
+                                    value = VarValue{r};
+                                  },
+                                  [](auto &) {
+                                    throw std::runtime_error(
+                                        "must apply named value");
+                                  }},
+                       frame.f);
+          },
+          [&](K_Bop1 &frame) {
+            go_exp = &frame.y;
+            k.emplace_back(std::in_place_type<K_Bop2>, std::move(value),
+                           frame.bop);
+            dispatch = GO;
+          },
+          [&](K_Bop2 &frame) {
+            auto r = fresh();
+            k2.emplace_back(std::in_place_type<K2_Bop1>, r, frame.bop,
+                            std::move(frame.x), std::move(value));
+            value = VarValue{r};
+          },
+          [&](K_If1 &frame) {
+            auto j = fresh();
+            auto p = fresh();
+
+            k2.emplace_back(std::in_place_type<K2_If1>, frame.t, frame.f,
+                            std::move(j), p, std::move(value));
+            value = VarValue{p};
+          },
+          [&](K_If2 &frame) {
+            k2_exp = make(JumpExp{.joinName = std::move(frame.j),
+                                  .slotValue = {std::move(value)}});
+            dispatch = APPLY_K2;
+          },
+      },
+      frame);
+  break;
+}
 ```

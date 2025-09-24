@@ -994,6 +994,10 @@ before, it doesn't have to be modified in these cases:
 },
 ```
 
+We have to be careful to only assign `value` after moving the old value into
+the frame pushed into `k2`. Mixing up the order of modifications can
+cause the wrong value to be in the frame.
+
 The last case `K_If2` calls `applyK'` with a jump expression without
 pushing to `k2`. `applyK'` doesn't use `k`, `go_exp`, or `value` but there is no need to clear out these variables; they will just be ignored in all the `applyK'` cases.
 
@@ -1009,7 +1013,7 @@ The `applyK'` structure is similar to the structure of `applyK` in that it
 first checks and handles the case where `k2` is empty and otherwise pops
 the last frame off of `k2` and visits all variants of it. The main difference
 is that when `k2` is empty the final ANF expression is returned, breaking out
-of the whole state machine loop:
+of the whole state machine loop.
 
 ```cpp
 case APPLY_K2: {
@@ -1027,71 +1031,96 @@ case APPLY_K2: {
 }
 ```
 
+In the first case `K2_Lam1`, `applyK` is called with the stack of frames
+held inside `k2`'s frame. The old value of `k` is discarded, which is fine
+because `k` is forgotten in the `applyK'` context anyway.
+
 ```cpp
-case APPLY_K2: {
-  if (k2.empty()) {
-    return k2_exp;
-  }
-  auto frame = std::move(k2.back());
-  k2.pop_back();
-  std::visit(
-      overloaded{
-          [&](K2_Lam1 &frame) {
-            auto f = fresh();
-            k = std::move(frame.k);
-            value = VarValue{f};
-            k2.emplace_back(std::in_place_type<K2_Lam2>, f, frame.v,
-                            std::move(k2_exp));
-            dispatch = APPLY_K;
-          },
-          [&](K2_Lam2 &frame) {
-            k2_exp = make(FunExp{.name = std::move(frame.f),
-                                 .params = {std::move(frame.v)},
-                                 .body = std::move(frame.body),
-                                 .rest = std::move(k2_exp)});
-          },
-          [&](K2_App1 &frame) {
-            k2_exp = make(AppExp{.name = std::move(frame.r),
-                                 .funName = std::move(frame.f),
-                                 .paramValues = {std::move(frame.x)},
-                                 .rest = std::move(k2_exp)});
-          },
-          [&](K2_Bop1 &frame) {
-            k2_exp = make(BopExp{.name = std::move(frame.r),
-                                 .bop = frame.bop,
-                                 .param1 = std::move(frame.x),
-                                 .param2 = std::move(frame.y),
-                                 .rest = std::move(k2_exp)});
-          },
-          [&](K2_If1 &frame) {
-            go_exp = &frame.t;
-            k2.emplace_back(std::in_place_type<K2_If2>, frame.f, frame.j,
-                            std::move(frame.p), std::move(frame.c),
-                            std::move(k2_exp));
-            k.clear();
-            k.emplace_back(std::in_place_type<K_If2>, frame.j);
-            dispatch = GO;
-          },
-          [&](K2_If2 &frame) {
-            go_exp = &frame.f;
-            k2.emplace_back(std::in_place_type<K2_If3>, std::move(k2_exp),
-                            frame.j, std::move(frame.p), std::move(frame.c),
-                            std::move(frame.rest));
-            k.clear();
-            k.emplace_back(std::in_place_type<K_If2>, frame.j);
-            dispatch = GO;
-          },
-          [&](K2_If3 &frame) {
-            k2_exp = make(JoinExp{
-                .name = std::move(frame.j),
-                .slot = {std::move(frame.p)},
-                .body = std::move(frame.rest),
-                .rest = make(IfExp{.cond = std::move(frame.c),
-                                   .thenBranch = std::move(frame.t),
-                                   .elseBranch = std::move(k2_exp)})});
-          },
-      },
-      frame);
-  break;
-}
+[&](K2_Lam1 &frame) {
+  auto f = fresh();
+  k = std::move(frame.k);
+  value = VarValue{f};
+  k2.emplace_back(std::in_place_type<K2_Lam2>, f, frame.v,
+                  std::move(k2_exp));
+  dispatch = APPLY_K;
+},
 ```
+
+The next three cases, `K2_Lam2`, `K2_App1`, and `K2_Bop1` recursively
+calls itself with its expression wrapped in a larger expression that also contains parts of the variables in the frame.
+
+```cpp
+[&](K2_Lam2 &frame) {
+  k2_exp = make(FunExp{.name = std::move(frame.f),
+                       .params = {std::move(frame.v)},
+                       .body = std::move(frame.body),
+                       .rest = std::move(k2_exp)});
+},
+[&](K2_App1 &frame) {
+  k2_exp = make(AppExp{.name = std::move(frame.r),
+                       .funName = std::move(frame.f),
+                       .paramValues = {std::move(frame.x)},
+                       .rest = std::move(k2_exp)});
+},
+[&](K2_Bop1 &frame) {
+  k2_exp = make(BopExp{.name = std::move(frame.r),
+                       .bop = frame.bop,
+                       .param1 = std::move(frame.x),
+                       .param2 = std::move(frame.y),
+                       .rest = std::move(k2_exp)});
+},
+```
+
+The next two cases `K2_If1` and `K2_If2` call `go` with `k` having only one element in the stack.
+This is done by clearing the old value of `k` and pushing a single frame.
+
+```cpp
+[&](K2_If1 &frame) {
+  go_exp = &frame.t;
+  k2.emplace_back(std::in_place_type<K2_If2>, frame.f, frame.j,
+                  std::move(frame.p), std::move(frame.c),
+                  std::move(k2_exp));
+  k.clear();
+  k.emplace_back(std::in_place_type<K_If2>, frame.j);
+  dispatch = GO;
+},
+[&](K2_If2 &frame) {
+  go_exp = &frame.f;
+  k2.emplace_back(std::in_place_type<K2_If3>, std::move(k2_exp),
+                  frame.j, std::move(frame.p), std::move(frame.c),
+                  std::move(frame.rest));
+  k.clear();
+  k.emplace_back(std::in_place_type<K_If2>, frame.j);
+  dispatch = GO;
+},
+```
+
+The last case, `K2_If3` recursively calls itself with its expression
+wrapped in a join and a if expression containing the rest of the variables
+in the frame.
+
+```cpp
+[&](K2_If3 &frame) {
+  k2_exp = make(JoinExp{
+      .name = std::move(frame.j),
+      .slot = {std::move(frame.p)},
+      .body = std::move(frame.rest),
+      .rest = make(IfExp{.cond = std::move(frame.c),
+                         .thenBranch = std::move(frame.t),
+                         .elseBranch = std::move(k2_exp)})});
+},
+```
+
+With this, the ANF conversion function is complete. The full code can be
+seen [here](https://github.com/DarinM223/lambcalc-cpp/blob/e2c3aa196e814dfbf627b649fd0c92c391a39552/src/anf.cpp#L119-L378).
+
+There are some ways to optimize this implementation further. Instead of encoding the conversion as an infinite loop with a switch statement to
+dispatch to the right function, we could use computed goto to jump
+to the relevant label. We could also use clang's `musttail` or Rust's explicit
+tail calls to dispatch between the `go`, `applyK` and `applyK'` cases, since at that point each function can have the same type signature. I chose the loop and switch method for this post so I can show that defunctionalization can work with any imperative language with a loop construct.
+
+Conclusion
+----------
+
+We were able to write expressive code for doing ANF conversion in functional languages and through a series of mostly mechanical transformations, convert it
+into stack-safe code in less expressive languages like C, C++, Rust, Java, Go, Python, etc. Unlike other methods like trampolining, the resulting code is directly expressed as a loop with little obvious performance pitfalls.

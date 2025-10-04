@@ -1122,5 +1122,5 @@ tail calls to dispatch between the `go`, `applyK` and `applyK'` cases, since at 
 Conclusion
 ----------
 
-We were able to write expressive code for doing ANF conversion in functional languages and through a series of mostly mechanical transformations, convert it
-into stack-safe code in less expressive languages like C, C++, Rust, Java, Go, Python, etc. Unlike other methods like trampolining, the resulting code is directly expressed as a loop with little obvious performance pitfalls.
+We were able to write expressive code for doing ANF conversion in Standard ML, a functional language, and through a series of mostly mechanical transformations, convert it
+into stack-safe code in C++. This technique can also be used to generate code in other less-expressive languages like C, Rust, Java, Go, Python, etc. Unlike other methods like trampolining, the resulting code is directly expressed as a loop with little obvious performance pitfalls. I think CPS conversion and defunctionalization are useful techniques to know in order to reliably solve functional programming problems in languages that are more likely to be used in jobs.

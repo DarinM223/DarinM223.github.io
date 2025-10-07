@@ -30,7 +30,7 @@ tmp2
 This representation is called [A-normal form](https://en.wikipedia.org/wiki/A-normal_form) or ANF for short. ANF conversion is the process of converting the abstract syntax tree into A-normal form. The image below shows the process of ANF conversion for a
 expression in a language with if, lambda, apply, and binary operator expressions:
 
-![ANF Conversion Example](anfconvert.png)
+![ANF Conversion Example](./static/media/anfconvert.png)
 
 How would we implement this transformation? Lets look at a sample example for
 if expressions. If we have `1 + if 0 + 1 then 1 + 2 else 2 * 3` what would the output look like?

@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title></title>
+  <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="static/css/prism.css">
+</head>
+
+<body>
+  <div class="wrapper">
+    <h1>Darin Minamoto</h1>
+    <div class="links">
+      <a href="./index.html">Home</a>
+      <a href="./about.html">About</a>
+      <a href="https://github.com/DarinM223">Github</a>
+    </div>
+
+    <div class="content">
+      <h3>Date: October 6, 2025</h3>
+      <h1
+      id="stack-safe-anf-conversion-in-c-using-defunctionalization">Stack
+      safe ANF conversion in C++ using defunctionalization</h1>
+      <p>Recently I’ve been interested in the idea of writing compilers
+      for functional programming languages in C++. C++ has the most
+      up-to-date bindings for generating LLVM IR, and is the most
+      commonly used language for compiler jobs. So I wanted to get some
+      project experience with C++, and what better way than to write a
+      small compiler for a functional language in it?</p>
+      <p>The biggest issue with using C++ for this task is that
+      compilers for functional languages tend to heavily use recursion
+      for rewriting trees, and with C++ we need to be careful not to
+      overflow the stack. While with most of the passes I can get by
+      with visitors and explicit heap allocated stack structures like
+      <code>std::stack</code> or <code>std::vector</code>, the thing
+      that stumped me the most was ANF conversion.</p>
+      <p>What is ANF conversion? Well, one difference between a compiler
+      for a functional language and an imperative one is that functional
+      compilers have higher order functions which must be transformed
+      away by the compiler before it can be lowered to LLVM. We also
+      want the compiler to apply specific transformations related to
+      functional programming languages like function uncurrying,
+      argument flattening, etc.</p>
+      <p>This calls for another intermediate language between the
+      abstract syntax tree and LLVM IR, which still preserves the tree
+      structure for nested functions, if statements, and join points
+      (which are like basic blocks but with arguments), but otherwise
+      disallows nested expressions. So something that is expressed as
+      <code>1 + 2 * 3</code> in the abstract syntax tree would be
+      represented like:</p>
+      <pre><code class="language-ocaml">let tmp1 = 2 * 3 in
+let tmp2 = 1 + tmp1 in
+tmp2</code></pre>
+      <p>This representation is called <a
+      href="https://en.wikipedia.org/wiki/A-normal_form">A-normal
+      form</a> or ANF for short. ANF conversion is the process of
+      converting the abstract syntax tree into A-normal form. The image
+      below shows the process of ANF conversion for a expression in a
+      language with if, lambda, apply, and binary operator
+      expressions:</p>
+      <figure>
+      <img src="static/media/anfconvert.png" alt="ANF Conversion Example" />
+      <figcaption aria-hidden="true">ANF Conversion Example</figcaption>
+      </figure>
+      <p>How would we implement this transformation? Lets look at a
+      sample example for if expressions. If we have
+      <code>1 + if 0 + 1 then 1 + 2 else 2 * 3</code> what would the
+      output look like?</p>
+      <pre><code class="language-ocaml">let tmp0 = 0 + 1 in
+let%join tmp1 &lt;tmp2&gt; =
+  let tmp3 = 1 + tmp2 in
+  tmp3
+in
+if tmp0 then
+  let tmp5 = 1 + 2 in
+  jump tmp1 tmp5
+else
+  let tmp6 = 2 * 3 in
+  jump tmp1 tmp6</code></pre>
+      <p>The body of the join point contains the “rest” of the code that
+      uses the value of the if expression (stored in the join point’s
+      argument <code>tmp2</code>). The then and else expressions are
+      recursively converted into ANF and linked to a jump expression at
+      the end. The psuedocode for what we want this transformation to
+      look like is shown below:</p>
+      <pre><code class="language-ocaml">result_condition = recursively convert condition expression
+let%join joinName &lt;slot&gt;
+  [rest of the computation using slot as the value of the if expression]
+in
+if result_condition then
+  result_then = recursively convert then expression
+  jump joinName result_then
+else
+  result_else = recursively convert else expression
+  jump joinName result_else</code></pre>
+      <p>Because we have a problem where we want to expand the rest of
+      the computation, we want to pass in a continuation into the
+      conversion function. The continuation will take as a parameter a
+      value denoting the result of the expression, and return the result
+      of ANF converting the rest of the program. This is what this looks
+      like in C++ (<code>k</code> is a member of the
+      <code>AnfConvertVisitor</code> class and refers to the
+      continuation):</p>
+      <div class="sourceCode" id="cb4"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> AnfConvertVisitor<span class="op">::</span><span class="kw">operator</span><span class="op">()(</span>ast<span class="op">::</span>IfExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> exp<span class="op">.</span>cond<span class="op">-&gt;</span>convert<span class="op">([&amp;</span>thenBranch <span class="op">=</span> <span class="op">*</span>exp<span class="op">.</span>then<span class="op">,</span> <span class="op">&amp;</span>elseBranch <span class="op">=</span> <span class="op">*</span>exp<span class="op">.</span>els<span class="op">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                            <span class="op">&amp;</span>k <span class="op">=</span> k<span class="op">](</span>Value condValue<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> joinName <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> slot <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> make<span class="op">(</span>JoinExp<span class="op">{</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>name <span class="op">=</span> joinName<span class="op">,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>slot <span class="op">=</span> <span class="bu">std::</span>optional<span class="op">{</span>slot<span class="op">},</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>body <span class="op">=</span> k<span class="op">(</span>VarValue<span class="op">{</span>slot<span class="op">}),</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>rest <span class="op">=</span> make<span class="op">(</span>IfExp<span class="op">{</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>cond <span class="op">=</span> condValue<span class="op">,</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>thenBranch <span class="op">=</span> thenBranch<span class="op">.</span>convert<span class="op">([&amp;</span>joinName<span class="op">](</span>Value value<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>              <span class="cf">return</span> make<span class="op">(</span>JumpExp<span class="op">{</span>joinName<span class="op">,</span> <span class="bu">std::</span>optional<span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>value<span class="op">)}});</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>            <span class="op">}),</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>elseBranch <span class="op">=</span> elseBranch<span class="op">.</span>convert<span class="op">([&amp;</span>joinName<span class="op">](</span>Value value<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>              <span class="cf">return</span> make<span class="op">(</span>JumpExp<span class="op">{</span>joinName<span class="op">,</span> <span class="bu">std::</span>optional<span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>value<span class="op">)}});</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>            <span class="op">})})});</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>  <span class="op">});</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>The if else case is the hardest case to handle; the other cases
+      are pretty easy. However, we should take a step back. Just from
+      looking at the if else example it should be clear that the
+      conversion is happening recursively. We don’t want this because if
+      we pass in a larger AST, then we can get stack overflows.</p>
+      <p>What we want to do instead is to convert this recursion into a
+      loop. Because all recursive uses will have to be eliminated, that
+      includes the continuation call since that is also recursive. This
+      means that the higher order function <code>k</code> will have to
+      be eliminated through the process of defunctionalization.</p>
+      <p>Because defunctionalization is a pretty involved process, we
+      want to do this in a language better suited for the task. You
+      could use any functional language with guaranteed tail call
+      elimination like Scheme, Haskell, OCaml, etc. but for this I chose
+      Standard ML because it doesn’t have syntax sugar like do notation
+      or let binding syntax, making it slightly easier to identify
+      closures.</p>
+      <p>Let’s start off by writing the basic recursive implementation
+      for ANF conversion in Standard ML:</p>
+      <div class="sourceCode" id="cb5"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">local</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> go exp k =</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">case</span> exp <span class="kw">of</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>      L.Int i =&gt; k (Int i)</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    | L.Var v =&gt; k (Var v)</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    | L.Lam (v, body) =&gt;</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>          <span class="kw">val</span> body = go body Halt</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>          <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>          Fun (f, [v], body, k (Var f))</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    | L.App (f, x) =&gt;</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>        go f (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        go x (<span class="kw">fn</span> x =&gt;</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>        <span class="kw">case</span> f <span class="kw">of</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>          Var f =&gt; <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span> <span class="kw">in</span> App (r, f, [x], k (Var r)) <span class="kw">end</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>        | _ =&gt; <span class="kw">raise</span> Fail <span class="st">&quot;must apply named value&quot;</span>))</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    | L.Bop (bop, x, y) =&gt;</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>        go x (<span class="kw">fn</span> x =&gt;</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>        go y (<span class="kw">fn</span> y =&gt;</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> Bop (r, bop, x, y, k (Var r))</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span>))</span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>    | L.If (c, t, f) =&gt;</span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>        go c (<span class="kw">fn</span> c =&gt;</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>          <span class="kw">let</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>            <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>            <span class="kw">val</span> jump = <span class="kw">fn</span> p =&gt; Jump (j, SOME p)</span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>          <span class="kw">in</span></span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>            Join (j, SOME p, k (Var p), If (c, go t jump, go f jump))</span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>          <span class="kw">end</span>)</span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span> <span class="kw">val</span> convert = <span class="kw">fn</span> exp =&gt; go exp Halt</span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span></code></pre></div>
+      <p>Although we pass in a continuation <code>k</code> into the
+      conversion function, this conversion function is not in
+      continuation passing style form. In continuation passing style,
+      all function calls are always in tail position, or in other words,
+      at the very end of the function. But in this function, we call
+      <code>k</code> and use its return value afterwards, which means it
+      is not called in tail position. So the first thing we need to do
+      is convert <code>go</code> to be in proper continuation passing
+      style form. We do that by having the continuation <code>k</code>
+      itself take in a continuation for what to do with the result ANF
+      expression. We call this continuation <code>k'</code> and it takes
+      an ANF expression as a parameter and the result. Then, we thread
+      <code>k'</code> into the <code>go</code> function as well so that
+      when we need to call <code>k</code> we have a <code>k'</code>
+      ready to pass into it.</p>
+      <div class="sourceCode" id="cb6"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">local</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> go (exp: L.exp) (k&#39;: exp -&gt; exp) (k: value * (exp -&gt; exp) -&gt; exp) : exp =</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">case</span> exp <span class="kw">of</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>      L.Int i =&gt; k (Int i, k&#39;)</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    | L.Var v =&gt; k (Var v, k&#39;)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    | L.Lam (v, body) =&gt;</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>          <span class="kw">val</span> k&#39; = <span class="kw">fn</span> body =&gt;</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>            <span class="kw">in</span> k (Var f, <span class="kw">fn</span> rest =&gt; k&#39; (Fun (f, [v], body, rest)))</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>            <span class="kw">end</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>          go body k&#39; (<span class="kw">fn</span> (value, k&#39;) =&gt; k&#39; (Halt value))</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>    | L.App (f, x) =&gt;</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>        go f k&#39; (<span class="kw">fn</span> (f, k&#39;) =&gt;</span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>        go x k&#39; (<span class="kw">fn</span> (x, k&#39;) =&gt;</span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">case</span> f <span class="kw">of</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>          Var f =&gt;</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>            <span class="kw">in</span> k (Var r, <span class="kw">fn</span> rest =&gt; k&#39; (App (r, f, [x], rest)))</span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>            <span class="kw">end</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>        | _ =&gt; <span class="kw">raise</span> Fail <span class="st">&quot;must apply named value&quot;</span>))</span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>    | L.Bop (bop, x, y) =&gt;</span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>        go x k&#39; (<span class="kw">fn</span> (x, k&#39;) =&gt;</span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>        go y k&#39; (<span class="kw">fn</span> (y, k&#39;) =&gt;</span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> k (Var r, <span class="kw">fn</span> rest =&gt; k&#39; (Bop (r, bop, x, y, rest)))</span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span>))</span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>    | L.If (c, t, f) =&gt;</span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a>        go c k&#39; (<span class="kw">fn</span> (c, k&#39;) =&gt;</span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>          <span class="kw">let</span></span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>            <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a>            <span class="kw">val</span> jump = <span class="kw">fn</span> (v, k&#39;) =&gt; k&#39; (Jump (j, SOME v))</span>
+<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a>            <span class="kw">val</span> go&#39; = <span class="kw">fn</span> e =&gt; <span class="kw">fn</span> f =&gt; go e f jump</span>
+<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a>          <span class="kw">in</span></span>
+<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a>            k (Var p, <span class="kw">fn</span> rest =&gt;</span>
+<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a>              go&#39; t (<span class="kw">fn</span> t =&gt;</span>
+<span id="cb6-39"><a href="#cb6-39" aria-hidden="true" tabindex="-1"></a>              go&#39; f (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb6-40"><a href="#cb6-40" aria-hidden="true" tabindex="-1"></a>              k&#39; (Join (j, SOME p, rest, If (c, t, f))))))</span>
+<span id="cb6-41"><a href="#cb6-41" aria-hidden="true" tabindex="-1"></a>          <span class="kw">end</span>)</span>
+<span id="cb6-42"><a href="#cb6-42" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span></span>
+<span id="cb6-43"><a href="#cb6-43" aria-hidden="true" tabindex="-1"></a>  <span class="kw">val</span> convertCPS: L.exp -&gt; exp = <span class="kw">fn</span> e =&gt;</span>
+<span id="cb6-44"><a href="#cb6-44" aria-hidden="true" tabindex="-1"></a>    go e (<span class="kw">fn</span> a =&gt; a) (<span class="kw">fn</span> (v, k) =&gt; k (Halt v))</span>
+<span id="cb6-45"><a href="#cb6-45" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span></code></pre></div>
+      <p>This function is completely tail recursive, but we cannot port
+      this directly to C++. Even if we use Clang and GCC’s
+      <code>musttail</code> attribute for tail call optimization, that
+      optimization can only be applied for tail calls with the exact
+      same type signature as the function itself, which is not the case
+      here. So we still need to do defunctionalization.</p>
+      <p>The first step to defunctionalization is to identify the types
+      of closures that need to be lowered. For our ANF conversion
+      function we have two types: <code>k'</code> which refers to
+      closures with the type <code>exp -&gt; exp</code>, and
+      <code>k</code> for the type
+      <code>value * (exp -&gt; exp) -&gt; exp</code>. We create two
+      algebraic data types, <code>K'</code> for representing closures
+      with the type of <code>k'</code>, and <code>K</code> representing
+      closures with the type of <code>k</code>. We then create two
+      functions <code>applyK'</code>, and <code>applyK</code> that will
+      be used in place of calling a continuation with the given
+      arguments. The <code>exp -&gt; exp</code> argument to
+      <code>k</code> is also translated to a <code>K'</code> type since
+      we are replacing all higher order functions with the
+      defunctionalized version. This is what it looks like so far, with
+      <code>...</code> representing the parts that haven’t been filled
+      out yet:</p>
+      <div class="sourceCode" id="cb7"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">datatype</span> K&#39; =</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> K =</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="kw">fun</span> go (exp: L.exp) (k&#39;: K&#39;) (k: K) : exp =</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> applyK&#39; (k&#39; : K&#39;) (exp: exp) : exp =</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> applyK (k : K) (value: value) (k&#39;: K&#39;) : exp =</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+      <p>Now we have to identify all the closures for each closure type.
+      This means looking for all expressions in the form
+      <code>fn _ =&gt;</code>. Starting with <code>k'</code>, there are
+      two closures in the <code>Lam</code> branch:</p>
+      <div class="sourceCode" id="cb8"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>| L.Lam (v, body) =&gt;</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>      <span class="kw">val</span> k&#39; = <span class="co">(* k&#39; closure 1 *)</span> <span class="kw">fn</span> body =&gt;</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> k (Var f, <span class="co">(* k&#39; closure 2 *)</span> <span class="kw">fn</span> rest =&gt; k&#39; (Fun (f, [v], body, rest)))</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>      go body k&#39; (<span class="kw">fn</span> (value, k&#39;) =&gt; k&#39; (Halt value))</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span></code></pre></div>
+      <p>The second closure for <code>k'</code> is inside the first
+      closure but we still have to count it.</p>
+      <p>We also have to identify all of the free variables for each
+      closure. Free variables are variables that are defined outside the
+      closure but referred to inside the closure. For the first closure,
+      variables <code>k</code>, <code>k'</code>, and <code>v</code> are
+      free (marked with the <code>(**)</code> in the code below):</p>
+      <div class="sourceCode" id="cb9"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> body =&gt;</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">(**)</span> k (Var f, <span class="kw">fn</span> rest =&gt; <span class="co">(**)</span> k&#39; (Fun (f, [<span class="co">(**)</span> v], body, rest)))</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span></span></code></pre></div>
+      <p>For the second closure, <code>k'</code>, <code>f</code>,
+      <code>v</code>, and <code>body</code> are free:</p>
+      <div class="sourceCode" id="cb10"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> rest =&gt; <span class="co">(**)</span> k&#39; (Fun (<span class="co">(**)</span> f, [<span class="co">(**)</span> v], <span class="co">(**)</span> body, rest))</span></code></pre></div>
+      <p>For both closures, we make a data constructor for the
+      <code>K'</code> type that contains the free variables for the
+      respective closures:</p>
+      <div class="sourceCode" id="cb11"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">datatype</span> K&#39; =</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  K&#39;_Lam1 <span class="kw">of</span> {k&#39;: K&#39;, k: K, v: <span class="dt">string</span>}</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>| K&#39;_Lam2 <span class="kw">of</span> {k&#39;: K&#39;, f: <span class="dt">string</span>, v: <span class="dt">string</span>, body: exp}</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>...</span></code></pre></div>
+      <p>For the <code>App</code> branch, there is one <code>k'</code>
+      closure with free variables <code>k'</code>, <code>r</code>,
+      <code>f</code>, and <code>x</code>:</p>
+      <div class="sourceCode" id="cb12"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> rest =&gt; <span class="co">(**)</span> k&#39; (App (<span class="co">(**)</span> r, <span class="co">(**)</span> f, [<span class="co">(**)</span> x], rest))</span></code></pre></div>
+      <p>We add another constructor to <code>K'</code>:</p>
+      <div class="sourceCode" id="cb13"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>| K&#39;_App1 <span class="kw">of</span> {r: <span class="dt">string</span>, f: <span class="dt">string</span>, x: value, k&#39;: K&#39;}</span></code></pre></div>
+      <p>For the <code>Bop</code> branch, there is one <code>k'</code>
+      closure with free variables <code>k'</code>, <code>r</code>,
+      <code>bop</code>, <code>x</code>, and <code>y</code>:</p>
+      <div class="sourceCode" id="cb14"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> rest =&gt; <span class="co">(**)</span> k&#39; (Bop (<span class="co">(**)</span> r, <span class="co">(**)</span> bop, <span class="co">(**)</span> x, <span class="co">(**)</span> y, rest))</span></code></pre></div>
+      <div class="sourceCode" id="cb15"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>| K&#39;_Bop1 <span class="kw">of</span> {r: <span class="dt">string</span>, bop: L.bop, x: value, y: value, k&#39;: K&#39;}</span></code></pre></div>
+      <p>For the <code>If</code> branch, we have three <code>k'</code>
+      closures:</p>
+      <div class="sourceCode" id="cb16"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>| L.If (c, t, f) =&gt;</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    go c k&#39; (<span class="kw">fn</span> (c, k&#39;) =&gt;</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> jump = <span class="kw">fn</span> (v, k&#39;) =&gt; k&#39; (Jump (j, SOME v))</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> go&#39; = <span class="kw">fn</span> e =&gt; <span class="kw">fn</span> f =&gt; go e f jump</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">in</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>        k (Var p, <span class="co">(* closure 1 *)</span> <span class="kw">fn</span> rest =&gt;</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>          go&#39; t <span class="co">(* closure 2 *)</span> (<span class="kw">fn</span> t =&gt;</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>          go&#39; f <span class="co">(* closure 3 *)</span> (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>          k&#39; (Join (j, SOME p, rest, If (c, t, f))))))</span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>      <span class="kw">end</span>)</span></code></pre></div>
+      <p>Note that when counting the closures for this branch, we ignore
+      the closures in <code>go'</code> because <code>go' e f</code> is
+      just a alias for <code>go e f jump</code> so the definition of
+      <code>go'</code> is not necessary and can be inlined away.</p>
+      <p>The first closure has free variables <code>t</code>,
+      <code>f</code>, <code>k'</code>, <code>j</code>, <code>p</code>,
+      and <code>c</code>:</p>
+      <div class="sourceCode" id="cb17"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> rest =&gt;</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  go&#39; <span class="co">(**)</span> t (<span class="kw">fn</span> t =&gt;</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  go&#39; <span class="co">(**)</span> f (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">(**)</span> k&#39; (Join (<span class="co">(**)</span> j, SOME <span class="co">(**)</span> p, rest, If (<span class="co">(**)</span> c, t, f)))))</span></code></pre></div>
+      <p>Since <code>t</code> and <code>f</code> are shadowed here we
+      are referring to the AST expressions, not the converted ANF
+      expressions.</p>
+      <p>The second closure has free variables <code>f</code>,
+      <code>k'</code>, <code>j</code>, <code>p</code>,
+      <code>rest</code>, and <code>c</code>:</p>
+      <div class="sourceCode" id="cb18"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> t =&gt;</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  go&#39; <span class="co">(**)</span> f (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">(**)</span> k&#39; (Join (<span class="co">(**)</span> j, SOME <span class="co">(**)</span> p, <span class="co">(**)</span> rest, If (<span class="co">(**)</span> c, t, f))))</span></code></pre></div>
+      <p>And the third closure has free variables <code>k'</code>,
+      <code>j</code>, <code>p</code>, <code>rest</code>, <code>c</code>,
+      and <code>t</code>:</p>
+      <div class="sourceCode" id="cb19"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> f =&gt;</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(**)</span> k&#39; (Join (<span class="co">(**)</span> j, SOME <span class="co">(**)</span> p,  <span class="co">(**)</span> rest, If (<span class="co">(**)</span> c, <span class="co">(**)</span> t, f)))</span></code></pre></div>
+      <p>For this closure, <code>t</code> refers to the converted ANF
+      expression instead of the AST expression.</p>
+      <p>This results in three new data constructors for
+      <code>K'</code>:</p>
+      <div class="sourceCode" id="cb20"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>| K&#39;_If1 <span class="kw">of</span> {t: L.exp, f: L.exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value}</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>| K&#39;_If2 <span class="kw">of</span> {f: L.exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>| K&#39;_If3 <span class="kw">of</span> {t: exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span></code></pre></div>
+      <p>Finally, <code>convertCPS</code> has a
+      <code>(fn a =&gt; a)</code> that is passed as a <code>k'</code>
+      closure. Since that has no free variables, the constructor doesn’t
+      contain anything:</p>
+      <div class="sourceCode" id="cb21"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>| K&#39;_Convert <span class="co">(* Initial fn a =&gt; a passed into go *)</span></span></code></pre></div>
+      <p>That’s it for the <code>k'</code> closures. Now we have to add
+      the data constructors for the <code>k</code> closures. We are
+      looking for closures that have a tuple as a parameter now.</p>
+      <p>The first one is in the <code>Lam</code> branch with no free
+      variables:</p>
+      <div class="sourceCode" id="cb22"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>go body k&#39; (<span class="kw">fn</span> (value, k&#39;) =&gt; k&#39; (Halt value))</span></code></pre></div>
+      <p>The <code>App</code> branch has two <code>k</code> closures
+      with free variables <code>x</code>, <code>k</code> for the first
+      closure, and <code>f</code>, <code>k</code> for the second
+      closure:</p>
+      <div class="sourceCode" id="cb23"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>| L.App (f, x) =&gt;</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    go f k&#39; <span class="co">(* closure 1 *)</span> (<span class="kw">fn</span> (f, k&#39;) =&gt;</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    go x k&#39; <span class="co">(* closure 2 *)</span> (<span class="kw">fn</span> (x, k&#39;) =&gt;</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">case</span> f <span class="kw">of</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>      Var f =&gt;</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> k (Var r, <span class="kw">fn</span> rest =&gt; k&#39; (App (r, f, [x], rest)))</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    | _ =&gt; <span class="kw">raise</span> Fail <span class="st">&quot;must apply named value&quot;</span>))</span></code></pre></div>
+      <p>The <code>Bop</code> branch has two <code>k</code> closures
+      with free variables <code>y</code>, <code>bop</code>,
+      <code>k</code> for the first closure, and <code>x</code>,
+      <code>bop</code>, <code>k</code> for the second closure:</p>
+      <div class="sourceCode" id="cb24"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>| L.Bop (bop, x, y) =&gt;</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    go x k&#39; <span class="co">(* closure 1 *)</span> (<span class="kw">fn</span> (x, k&#39;) =&gt;</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    go y k&#39; <span class="co">(* closure 2 *)</span> (<span class="kw">fn</span> (y, k&#39;) =&gt;</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span> k (Var r, <span class="kw">fn</span> rest =&gt; k&#39; (Bop (r, bop, x, y, rest)))</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span>))</span></code></pre></div>
+      <p>And the <code>If</code> branch has two <code>k</code> closures
+      with free variables <code>t</code>, <code>f</code>, <code>k</code>
+      for the first closure and <code>j</code> for the second
+      closure:</p>
+      <div class="sourceCode" id="cb25"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>| L.If (c, t, f) =&gt;</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    go c k&#39; <span class="co">(* closure 1 *)</span> (<span class="kw">fn</span> (c, k&#39;) =&gt;</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> jump = <span class="co">(* closure 2 *)</span> <span class="kw">fn</span> (v, k&#39;) =&gt; k&#39; (Jump (j, SOME v))</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">val</span> go&#39; = <span class="kw">fn</span> e =&gt; <span class="kw">fn</span> f =&gt; go e f jump</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">in</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>        k (Var p, <span class="kw">fn</span> rest =&gt;</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>          go&#39; t (<span class="kw">fn</span> t =&gt;</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>          go&#39; f (<span class="kw">fn</span> f =&gt;</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>          k&#39; (Join (j, SOME p, rest, If (c, t, f))))))</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>      <span class="kw">end</span>)</span></code></pre></div>
+      <p>In <code>convertCPS</code>, we pass in a
+      <code>(fn (v, k) =&gt; k (Halt v))</code> closure which is exactly
+      the same as the closure passed in the <code>Lam1</code> branch so
+      we don’t need to add another constructor.</p>
+      <p>Now that we filled out the constructors for <code>K</code> and
+      <code>K'</code> we can rewrite the cases in <code>go</code> so
+      that all calls to <code>k (a, b)</code> are replaced with
+      <code>applyK k a b</code>, all calls to <code>k' a</code> are
+      replaced with <code>applyK' k' a</code>, and all closures passed
+      in are replaced with the corresponding data constructor for
+      <code>k</code> or <code>k'</code>.</p>
+      <div class="sourceCode" id="cb26"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fun</span> go (exp: L.exp) (k&#39;: K&#39;) (k: K) : exp =</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">case</span> exp <span class="kw">of</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    L.Int i =&gt; applyK k (Int i) k&#39;</span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  | L.Var v =&gt; applyK k (Var v) k&#39;</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  | L.Lam (v, body) =&gt; go body (K&#39;_Lam1 {k&#39; = k&#39;, k = k, v = v}) K_Lam1</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>  | L.App (f, x) =&gt; go f k&#39; (K_App1 {x = x, k = k})</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>  | L.Bop (bop, x, y) =&gt; go x k&#39; (K_Bop1 {y = y, bop = bop, k = k})</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>  | L.If (c, t, f) =&gt; go c k&#39; (K_If1 {t = t, f = f, k = k})</span></code></pre></div>
+      <p>We don’t have to care that closures are nested in each other,
+      we only pass in the corresponding data constructor for the topmost
+      closure. The nested closures will be handled in the body of
+      <code>applyK</code> or <code>applyK'</code>.</p>
+      <p>Now we do the same thing for <code>applyK'</code> and
+      <code>applyK</code>.</p>
+      <p>Starting with <code>applyK'</code>, the closure for
+      <code>K'_Convert</code> is <code>(fn a =&gt; a)</code>, which
+      becomes:</p>
+      <div class="sourceCode" id="cb27"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> applyK&#39; K&#39;_Convert exp = exp</span></code></pre></div>
+      <p>The closure for the first closure in the <code>Lam</code>
+      branch is:</p>
+      <div class="sourceCode" id="cb28"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> body =&gt;</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span> k (Var f, <span class="kw">fn</span> rest =&gt; k&#39; (Fun (f, [v], body, rest)))</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span></span></code></pre></div>
+      <p>So the corresponding <code>applyK'</code> branch becomes:</p>
+      <div class="sourceCode" id="cb29"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>| applyK&#39; (K&#39;_Lam1 {k&#39;, k, v}) body =</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span> applyK k (Var f) (K&#39;_Lam2 {k&#39; = k&#39;, f = f, v = v, body = body})</span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span></code></pre></div>
+      <p>The nested second closure in the <code>Lam</code> branch
+      is:</p>
+      <div class="sourceCode" id="cb30"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> rest =&gt; k&#39; (Fun (f, [v], body, rest))</span></code></pre></div>
+      <p>Which becomes:</p>
+      <div class="sourceCode" id="cb31"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>| applyK&#39; (K&#39;_Lam2 {k&#39;, f, v, body}) rest =</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    applyK&#39; k&#39; (Fun (f, [v], body, rest))</span></code></pre></div>
+      <p>Because each closure case only handles its own body ignoring
+      nesting, the total lines of code for the defunctionalized case
+      isn’t significantly greater than the normal tail recursive one. Of
+      course, the defunctionalized version is much harder to understand.
+      The final code after handling all of the <code>applyK</code> and
+      <code>applyK'</code> cases is shown below:</p>
+      <div class="sourceCode" id="cb32"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">local</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> go (exp: L.exp) (k&#39;: K&#39;) (k: K) : exp =</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">case</span> exp <span class="kw">of</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>      L.Int i =&gt; applyK k (Int i) k&#39;</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    | L.Var v =&gt; applyK k (Var v) k&#39;</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    | L.Lam (v, body) =&gt; go body (K&#39;_Lam1 {k&#39; = k&#39;, k = k, v = v}) K_Lam1</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>    | L.App (f, x) =&gt; go f k&#39; (K_App1 {x = x, k = k})</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    | L.Bop (bop, x, y) =&gt; go x k&#39; (K_Bop1 {y = y, bop = bop, k = k})</span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>    | L.If (c, t, f) =&gt; go c k&#39; (K_If1 {t = t, f = f, k = k})</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> applyK&#39; K&#39;_Convert exp = exp</span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_Lam1 {k&#39;, k, v}) body =</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> applyK k (Var f) (K&#39;_Lam2 {k&#39; = k&#39;, f = f, v = v, body = body})</span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_Lam2 {k&#39;, f, v, body}) rest =</span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (Fun (f, [v], body, rest))</span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_App1 {r, f, x, k&#39;}) rest =</span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (App (r, f, [x], rest))</span>
+<span id="cb32-19"><a href="#cb32-19" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_Bop1 {r, bop, x, y, k&#39;}) rest =</span>
+<span id="cb32-20"><a href="#cb32-20" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (Bop (r, bop, x, y, rest))</span>
+<span id="cb32-21"><a href="#cb32-21" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_If1 {t, f, k&#39;, j, p, c}) rest =</span>
+<span id="cb32-22"><a href="#cb32-22" aria-hidden="true" tabindex="-1"></a>        go t (K&#39;_If2 {f = f, k&#39; = k&#39;, j = j, p = p, c = c, rest = rest})</span>
+<span id="cb32-23"><a href="#cb32-23" aria-hidden="true" tabindex="-1"></a>          (K_If2 {j = j})</span>
+<span id="cb32-24"><a href="#cb32-24" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_If2 {f, k&#39;, j, p, c, rest}) t =</span>
+<span id="cb32-25"><a href="#cb32-25" aria-hidden="true" tabindex="-1"></a>        go f (K&#39;_If3 {t = t, k&#39; = k&#39;, j = j, p = p, c = c, rest = rest})</span>
+<span id="cb32-26"><a href="#cb32-26" aria-hidden="true" tabindex="-1"></a>          (K_If2 {j = j})</span>
+<span id="cb32-27"><a href="#cb32-27" aria-hidden="true" tabindex="-1"></a>    | applyK&#39; (K&#39;_If3 {t, k&#39;, j, p, c, rest}) f =</span>
+<span id="cb32-28"><a href="#cb32-28" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (Join (j, SOME p, rest, If (c, t, f)))</span>
+<span id="cb32-29"><a href="#cb32-29" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> applyK K_Lam1 value k&#39; =</span>
+<span id="cb32-30"><a href="#cb32-30" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (Halt value)</span>
+<span id="cb32-31"><a href="#cb32-31" aria-hidden="true" tabindex="-1"></a>    | applyK (K_App1 {x, k}) f k&#39; =</span>
+<span id="cb32-32"><a href="#cb32-32" aria-hidden="true" tabindex="-1"></a>        go x k&#39; (K_App2 {f = f, k = k})</span>
+<span id="cb32-33"><a href="#cb32-33" aria-hidden="true" tabindex="-1"></a>    | applyK (K_App2 {f, k}) x k&#39; =</span>
+<span id="cb32-34"><a href="#cb32-34" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">case</span> f <span class="kw">of</span></span>
+<span id="cb32-35"><a href="#cb32-35" aria-hidden="true" tabindex="-1"></a>           Var f =&gt;</span>
+<span id="cb32-36"><a href="#cb32-36" aria-hidden="true" tabindex="-1"></a>             <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb32-37"><a href="#cb32-37" aria-hidden="true" tabindex="-1"></a>             <span class="kw">in</span> applyK k (Var r) (K&#39;_App1 {r = r, f = f, x = x, k&#39; = k&#39;})</span>
+<span id="cb32-38"><a href="#cb32-38" aria-hidden="true" tabindex="-1"></a>             <span class="kw">end</span></span>
+<span id="cb32-39"><a href="#cb32-39" aria-hidden="true" tabindex="-1"></a>         | _ =&gt; <span class="kw">raise</span> Fail <span class="st">&quot;must apply named value&quot;</span>)</span>
+<span id="cb32-40"><a href="#cb32-40" aria-hidden="true" tabindex="-1"></a>    | applyK (K_Bop1 {y, bop, k}) x k&#39; =</span>
+<span id="cb32-41"><a href="#cb32-41" aria-hidden="true" tabindex="-1"></a>        go y k&#39; (K_Bop2 {x = x, bop = bop, k = k})</span>
+<span id="cb32-42"><a href="#cb32-42" aria-hidden="true" tabindex="-1"></a>    | applyK (K_Bop2 {x, bop, k}) y k&#39; =</span>
+<span id="cb32-43"><a href="#cb32-43" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span></span>
+<span id="cb32-44"><a href="#cb32-44" aria-hidden="true" tabindex="-1"></a>          <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb32-45"><a href="#cb32-45" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span></span>
+<span id="cb32-46"><a href="#cb32-46" aria-hidden="true" tabindex="-1"></a>          applyK k (Var r) (K&#39;_Bop1 {r = r, bop = bop, x = x, y = y, k&#39; = k&#39;})</span>
+<span id="cb32-47"><a href="#cb32-47" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb32-48"><a href="#cb32-48" aria-hidden="true" tabindex="-1"></a>    | applyK (K_If1 {t, f, k}) c k&#39; =</span>
+<span id="cb32-49"><a href="#cb32-49" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span></span>
+<span id="cb32-50"><a href="#cb32-50" aria-hidden="true" tabindex="-1"></a>          <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb32-51"><a href="#cb32-51" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span></span>
+<span id="cb32-52"><a href="#cb32-52" aria-hidden="true" tabindex="-1"></a>          applyK k (Var p) (K&#39;_If1</span>
+<span id="cb32-53"><a href="#cb32-53" aria-hidden="true" tabindex="-1"></a>            {t = t, f = f, k&#39; = k&#39;, j = j, p = p, c = c})</span>
+<span id="cb32-54"><a href="#cb32-54" aria-hidden="true" tabindex="-1"></a>        <span class="kw">end</span></span>
+<span id="cb32-55"><a href="#cb32-55" aria-hidden="true" tabindex="-1"></a>    | applyK (K_If2 {j}) v k&#39; =</span>
+<span id="cb32-56"><a href="#cb32-56" aria-hidden="true" tabindex="-1"></a>        applyK&#39; k&#39; (Jump (j, SOME v))</span>
+<span id="cb32-57"><a href="#cb32-57" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span> <span class="kw">val</span> convertDefunc: L.exp -&gt; exp = <span class="kw">fn</span> e =&gt; go e K&#39;_Convert K_Lam1</span>
+<span id="cb32-58"><a href="#cb32-58" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span></code></pre></div>
+      <p>There is one final thing we want to do before translating back
+      to C++. Let’s look at the datatypes for <code>K</code> and
+      <code>K'</code> again:</p>
+      <div class="sourceCode" id="cb33"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">datatype</span> K&#39; =</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  K&#39;_Convert <span class="co">(* Initial fn a =&gt; a passed into go *)</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>| K&#39;_Lam1 <span class="kw">of</span> {k&#39;: K&#39;, k: K, v: <span class="dt">string</span>}</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>| K&#39;_Lam2 <span class="kw">of</span> {k&#39;: K&#39;, f: <span class="dt">string</span>, v: <span class="dt">string</span>, body: exp}</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>| K&#39;_App1 <span class="kw">of</span> {r: <span class="dt">string</span>, f: <span class="dt">string</span>, x: value, k&#39;: K&#39;}</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>| K&#39;_Bop1 <span class="kw">of</span> {r: <span class="dt">string</span>, bop: L.bop, x: value, y: value, k&#39;: K&#39;}</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>| K&#39;_If1 <span class="kw">of</span> {t: L.exp, f: L.exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value}</span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>| K&#39;_If2 <span class="kw">of</span> {f: L.exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>| K&#39;_If3 <span class="kw">of</span> {t: exp, k&#39;: K&#39;, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> K =</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>  K_Lam1</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>| K_App1 <span class="kw">of</span> {x: L.exp, k: K}</span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a>| K_App2 <span class="kw">of</span> {f: value, k: K}</span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>| K_Bop1 <span class="kw">of</span> {y: L.exp, bop: L.bop, k: K}</span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>| K_Bop2 <span class="kw">of</span> {x: value, bop: L.bop, k: K}</span>
+<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a>| K_If1 <span class="kw">of</span> {t: L.exp, f: L.exp, k: K}</span>
+<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a>| K_If2 <span class="kw">of</span> {j: <span class="dt">string</span>}</span></code></pre></div>
+      <p>Inside almost every data constructor for <code>K'</code>, it
+      has another value of type <code>K'</code> inside of it as a free
+      variable. Data constructors for <code>K</code> mostly have
+      <code>K</code> as a free variable as well. If we model this in
+      C++, this would become a linked-list chain of
+      <code>unique_ptr</code>s which is not very efficient and harder to
+      work with.</p>
+      <p>Instead, we can remove all of the recursive free variables for
+      <code>K'</code> and model it as a stack of frames. The stack after
+      popping the topmost frame off of it is the free variable
+      <code>k'</code> for the topmost continuation. Pushing a frame to
+      the stack is the same as creating a closure that wraps the
+      existing closure as a free variable. The <code>K</code> type can
+      also be modeled as a stack in the same way. The cases
+      <code>K'_Convert</code> and <code>K_Lam1</code> are the cases
+      where the <code>K</code> or <code>K'</code> stack is empty.</p>
+      <p>This stack method can be efficiently modeled in C++ as a
+      dynamically resizable array like <code>std::vector</code>. Right
+      now we will model the stack as a list of frames but we will
+      translate it to a vector when converting to C++. Here are the
+      transformed types for <code>K</code> and <code>K'</code>:</p>
+      <div class="sourceCode" id="cb34"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">datatype</span> K&#39;Frame =</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  K&#39;_Lam1 <span class="kw">of</span> {k: K, v: <span class="dt">string</span>}</span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>| K&#39;_Lam2 <span class="kw">of</span> {f: <span class="dt">string</span>, v: <span class="dt">string</span>, body: exp}</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>| K&#39;_App1 <span class="kw">of</span> {r: <span class="dt">string</span>, f: <span class="dt">string</span>, x: value}</span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>| K&#39;_Bop1 <span class="kw">of</span> {r: <span class="dt">string</span>, bop: L.bop, x: value, y: value}</span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>| K&#39;_If1 <span class="kw">of</span> {t: L.exp, f: L.exp, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value}</span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>| K&#39;_If2 <span class="kw">of</span> {f: L.exp, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>| K&#39;_If3 <span class="kw">of</span> {t: exp, j: <span class="dt">string</span>, p: <span class="dt">string</span>, c: value, rest: exp}</span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> KFrame =</span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>  K_App1 <span class="kw">of</span> {x: L.exp}</span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>| K_App2 <span class="kw">of</span> {f: value}</span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>| K_Bop1 <span class="kw">of</span> {y: L.exp, bop: L.bop}</span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>| K_Bop2 <span class="kw">of</span> {x: value, bop: L.bop}</span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>| K_If1 <span class="kw">of</span> {t: L.exp, f: L.exp}</span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>| K_If2 <span class="kw">of</span> {j: <span class="dt">string</span>}</span>
+<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a><span class="kw">withtype</span> K&#39; = K&#39;Frame <span class="dt">list</span></span>
+<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> K = KFrame <span class="dt">list</span></span></code></pre></div>
+      <p>Now we rewrite the <code>go</code> function so that when we
+      pass in a closure that wraps <code>k</code> or <code>k'</code>, we
+      push the frame with the non-recursive free variables to the stack.
+      So something like <code>K'_Lam1 {k' = k', k = k, v = v}</code>
+      becomes <code>K'_Lam1 {k = k, v = v} :: k'</code>:</p>
+      <div class="sourceCode" id="cb35"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fun</span> go (exp: L.exp) (k&#39;: K&#39;) (k: K) : exp =</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">case</span> exp <span class="kw">of</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    L.Int i =&gt; applyK k (Int i) k&#39;</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>  | L.Var v =&gt; applyK k (Var v) k&#39;</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  | L.Lam (v, body) =&gt; go body (K&#39;_Lam1 {k = k, v = v} :: k&#39;) []</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>  | L.App (f, x) =&gt; go f k&#39; (K_App1 {x = x} :: k)</span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>  | L.Bop (bop, x, y) =&gt; go x k&#39; (K_Bop1 {y = y, bop = bop} :: k)</span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>  | L.If (c, t, f) =&gt; go c k&#39; (K_If1 {t = t, f = f} :: k)</span></code></pre></div>
+      <p><code>[]</code> is substituted for <code>K_Lam1</code> and
+      <code>K'_Convert</code>.</p>
+      <p>When rewriting the <code>applyK</code> and <code>applyK'</code>
+      functions, we destruct the <code>K</code> or <code>K'</code> stack
+      and the rest of the list is the free variable for <code>k</code>
+      or <code>k'</code>. So something like
+      <code>K'_Lam2 {k', f, v, body}</code> becomes
+      <code>K'_Lam2 {f, v, body} :: k'</code> when pattern matching:</p>
+      <div class="sourceCode" id="cb36"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> applyK&#39; [] (exp: exp) = exp</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_Lam1 {k, v} :: k&#39;) body =</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> <span class="kw">val</span> f = fresh <span class="st">&quot;f&quot;</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>      <span class="kw">in</span> applyK k (Var f) (K&#39;_Lam2 {f = f, v = v, body = body} :: k&#39;)</span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>      <span class="kw">end</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_Lam2 {f, v, body} :: k&#39;) rest =</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (Fun (f, [v], body, rest))</span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_App1 {r, f, x} :: k&#39;) rest =</span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (App (r, f, [x], rest))</span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_Bop1 {r, bop, x, y} :: k&#39;) rest =</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (Bop (r, bop, x, y, rest))</span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_If1 {t, f, j, p, c} :: k&#39;) rest =</span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>      go t (K&#39;_If2 {f = f, j = j, p = p, c = c, rest = rest} :: k&#39;)</span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a>        [K_If2 {j = j}]</span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_If2 {f, j, p, c, rest} :: k&#39;) t =</span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>      go f (K&#39;_If3 {t = t, j = j, p = p, c = c, rest = rest} :: k&#39;)</span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>        [K_If2 {j = j}]</span>
+<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>  | applyK&#39; (K&#39;_If3 {t, j, p, c, rest} :: k&#39;) f =</span>
+<span id="cb36-19"><a href="#cb36-19" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (Join (j, SOME p, rest, If (c, t, f)))</span>
+<span id="cb36-20"><a href="#cb36-20" aria-hidden="true" tabindex="-1"></a><span class="kw">and</span> applyK [] value k&#39; =</span>
+<span id="cb36-21"><a href="#cb36-21" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (Halt value)</span>
+<span id="cb36-22"><a href="#cb36-22" aria-hidden="true" tabindex="-1"></a>  | applyK (K_App1 {x} :: k) f k&#39; =</span>
+<span id="cb36-23"><a href="#cb36-23" aria-hidden="true" tabindex="-1"></a>      go x k&#39; (K_App2 {f = f} :: k)</span>
+<span id="cb36-24"><a href="#cb36-24" aria-hidden="true" tabindex="-1"></a>  | applyK (K_App2 {f} :: k) x k&#39; =</span>
+<span id="cb36-25"><a href="#cb36-25" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">case</span> f <span class="kw">of</span></span>
+<span id="cb36-26"><a href="#cb36-26" aria-hidden="true" tabindex="-1"></a>         Var f =&gt;</span>
+<span id="cb36-27"><a href="#cb36-27" aria-hidden="true" tabindex="-1"></a>           <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb36-28"><a href="#cb36-28" aria-hidden="true" tabindex="-1"></a>           <span class="kw">in</span> applyK k (Var r) (K&#39;_App1 {r = r, f = f, x = x} :: k&#39;)</span>
+<span id="cb36-29"><a href="#cb36-29" aria-hidden="true" tabindex="-1"></a>           <span class="kw">end</span></span>
+<span id="cb36-30"><a href="#cb36-30" aria-hidden="true" tabindex="-1"></a>       | _ =&gt; <span class="kw">raise</span> Fail <span class="st">&quot;must apply named value&quot;</span>)</span>
+<span id="cb36-31"><a href="#cb36-31" aria-hidden="true" tabindex="-1"></a>  | applyK (K_Bop1 {y, bop} :: k) x k&#39; =</span>
+<span id="cb36-32"><a href="#cb36-32" aria-hidden="true" tabindex="-1"></a>      go y k&#39; (K_Bop2 {x = x, bop = bop} :: k)</span>
+<span id="cb36-33"><a href="#cb36-33" aria-hidden="true" tabindex="-1"></a>  | applyK (K_Bop2 {x, bop} :: k) y k&#39; =</span>
+<span id="cb36-34"><a href="#cb36-34" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> <span class="kw">val</span> r = fresh <span class="st">&quot;r&quot;</span></span>
+<span id="cb36-35"><a href="#cb36-35" aria-hidden="true" tabindex="-1"></a>      <span class="kw">in</span> applyK k (Var r) (K&#39;_Bop1 {r = r, bop = bop, x = x, y = y} :: k&#39;)</span>
+<span id="cb36-36"><a href="#cb36-36" aria-hidden="true" tabindex="-1"></a>      <span class="kw">end</span></span>
+<span id="cb36-37"><a href="#cb36-37" aria-hidden="true" tabindex="-1"></a>  | applyK (K_If1 {t, f} :: k) c k&#39; =</span>
+<span id="cb36-38"><a href="#cb36-38" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> <span class="kw">val</span> (j, p) = (fresh <span class="st">&quot;j&quot;</span>, fresh <span class="st">&quot;p&quot;</span>)</span>
+<span id="cb36-39"><a href="#cb36-39" aria-hidden="true" tabindex="-1"></a>      <span class="kw">in</span> applyK k (Var p) (K&#39;_If1 {t = t, f = f, j = j, p = p, c = c} :: k&#39;)</span>
+<span id="cb36-40"><a href="#cb36-40" aria-hidden="true" tabindex="-1"></a>      <span class="kw">end</span></span>
+<span id="cb36-41"><a href="#cb36-41" aria-hidden="true" tabindex="-1"></a>  | applyK (K_If2 {j} :: _) v k&#39; =</span>
+<span id="cb36-42"><a href="#cb36-42" aria-hidden="true" tabindex="-1"></a>      applyK&#39; k&#39; (Jump (j, SOME v))</span></code></pre></div>
+      <p>Finally, <code>convertDefunc</code> becomes
+      <code>val convertDefunc: L.exp -&gt; exp = fn e =&gt; go e [] []</code>
+      since it is called with both stacks empty initially.</p>
+      <p>The first thing when translating our Standard ML code to C++ is
+      translating the algebraic data types for the continuations. This
+      can be done by encoding every data constructor as a C++ struct,
+      and encoding <code>KFrame</code> and <code>K2Frame</code> as a
+      <code>std::variant</code> of the structs. Then <code>K</code> is
+      an alias for a <code>std::vector</code> of <code>KFrame</code>s
+      and <code>K2</code> is an alias for a <code>std::vector</code> of
+      <code>K2Frame</code>s. The translated code for the data types is
+      shown below:</p>
+      <div class="sourceCode" id="cb37"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> KFrame<span class="op">;</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2Frame<span class="op">;</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a><span class="kw">using</span> K <span class="op">=</span> <span class="bu">std::</span>vector<span class="op">&lt;</span>KFrame<span class="op">&gt;;</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="kw">using</span> K2 <span class="op">=</span> <span class="bu">std::</span>vector<span class="op">&lt;</span>K2Frame<span class="op">&gt;;</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_Lam1 <span class="op">{</span></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>  K k<span class="op">;</span></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string v<span class="op">;</span></span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_Lam2 <span class="op">{</span></span>
+<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string f<span class="op">,</span> v<span class="op">;</span></span>
+<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> body<span class="op">;</span></span>
+<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-17"><a href="#cb37-17" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_App1 <span class="op">{</span></span>
+<span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string r<span class="op">,</span> f<span class="op">;</span></span>
+<span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a>  Value x<span class="op">;</span></span>
+<span id="cb37-20"><a href="#cb37-20" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-21"><a href="#cb37-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-22"><a href="#cb37-22" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_Bop1 <span class="op">{</span></span>
+<span id="cb37-23"><a href="#cb37-23" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string r<span class="op">;</span></span>
+<span id="cb37-24"><a href="#cb37-24" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Bop bop<span class="op">;</span></span>
+<span id="cb37-25"><a href="#cb37-25" aria-hidden="true" tabindex="-1"></a>  Value x<span class="op">,</span> y<span class="op">;</span></span>
+<span id="cb37-26"><a href="#cb37-26" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-27"><a href="#cb37-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-28"><a href="#cb37-28" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_If1 <span class="op">{</span></span>
+<span id="cb37-29"><a href="#cb37-29" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>t<span class="op">;</span></span>
+<span id="cb37-30"><a href="#cb37-30" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>f<span class="op">;</span></span>
+<span id="cb37-31"><a href="#cb37-31" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string j<span class="op">,</span> p<span class="op">;</span></span>
+<span id="cb37-32"><a href="#cb37-32" aria-hidden="true" tabindex="-1"></a>  Value c<span class="op">;</span></span>
+<span id="cb37-33"><a href="#cb37-33" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-34"><a href="#cb37-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-35"><a href="#cb37-35" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_If2 <span class="op">{</span></span>
+<span id="cb37-36"><a href="#cb37-36" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>f<span class="op">;</span></span>
+<span id="cb37-37"><a href="#cb37-37" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string j<span class="op">,</span> p<span class="op">;</span></span>
+<span id="cb37-38"><a href="#cb37-38" aria-hidden="true" tabindex="-1"></a>  Value c<span class="op">;</span></span>
+<span id="cb37-39"><a href="#cb37-39" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> rest<span class="op">;</span></span>
+<span id="cb37-40"><a href="#cb37-40" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-41"><a href="#cb37-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-42"><a href="#cb37-42" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2_If3 <span class="op">{</span></span>
+<span id="cb37-43"><a href="#cb37-43" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> t<span class="op">;</span></span>
+<span id="cb37-44"><a href="#cb37-44" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string j<span class="op">,</span> p<span class="op">;</span></span>
+<span id="cb37-45"><a href="#cb37-45" aria-hidden="true" tabindex="-1"></a>  Value c<span class="op">;</span></span>
+<span id="cb37-46"><a href="#cb37-46" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> rest<span class="op">;</span></span>
+<span id="cb37-47"><a href="#cb37-47" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-48"><a href="#cb37-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-49"><a href="#cb37-49" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K2Frame <span class="op">:</span> <span class="kw">public</span> <span class="bu">std::</span>variant<span class="op">&lt;</span>K2_Lam1<span class="op">,</span> K2_Lam2<span class="op">,</span> K2_App1<span class="op">,</span> K2_Bop1<span class="op">,</span> K2_If1<span class="op">,</span></span>
+<span id="cb37-50"><a href="#cb37-50" aria-hidden="true" tabindex="-1"></a>                                     K2_If2<span class="op">,</span> K2_If3<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb37-51"><a href="#cb37-51" aria-hidden="true" tabindex="-1"></a>  <span class="kw">using</span> variant<span class="op">::</span>variant<span class="op">;</span></span>
+<span id="cb37-52"><a href="#cb37-52" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-53"><a href="#cb37-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-54"><a href="#cb37-54" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_App1 <span class="op">{</span></span>
+<span id="cb37-55"><a href="#cb37-55" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>x<span class="op">;</span></span>
+<span id="cb37-56"><a href="#cb37-56" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-57"><a href="#cb37-57" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-58"><a href="#cb37-58" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_App2 <span class="op">{</span></span>
+<span id="cb37-59"><a href="#cb37-59" aria-hidden="true" tabindex="-1"></a>  Value f<span class="op">;</span></span>
+<span id="cb37-60"><a href="#cb37-60" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-61"><a href="#cb37-61" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-62"><a href="#cb37-62" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_Bop1 <span class="op">{</span></span>
+<span id="cb37-63"><a href="#cb37-63" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>y<span class="op">;</span></span>
+<span id="cb37-64"><a href="#cb37-64" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Bop bop<span class="op">;</span></span>
+<span id="cb37-65"><a href="#cb37-65" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-66"><a href="#cb37-66" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-67"><a href="#cb37-67" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_Bop2 <span class="op">{</span></span>
+<span id="cb37-68"><a href="#cb37-68" aria-hidden="true" tabindex="-1"></a>  Value x<span class="op">;</span></span>
+<span id="cb37-69"><a href="#cb37-69" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Bop bop<span class="op">;</span></span>
+<span id="cb37-70"><a href="#cb37-70" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-71"><a href="#cb37-71" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-72"><a href="#cb37-72" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_If1 <span class="op">{</span></span>
+<span id="cb37-73"><a href="#cb37-73" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>t<span class="op">;</span></span>
+<span id="cb37-74"><a href="#cb37-74" aria-hidden="true" tabindex="-1"></a>  ast<span class="op">::</span>Exp <span class="op">&amp;</span>f<span class="op">;</span></span>
+<span id="cb37-75"><a href="#cb37-75" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-76"><a href="#cb37-76" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-77"><a href="#cb37-77" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> K_If2 <span class="op">{</span></span>
+<span id="cb37-78"><a href="#cb37-78" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>string j<span class="op">;</span></span>
+<span id="cb37-79"><a href="#cb37-79" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb37-80"><a href="#cb37-80" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-81"><a href="#cb37-81" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> KFrame</span>
+<span id="cb37-82"><a href="#cb37-82" aria-hidden="true" tabindex="-1"></a>    <span class="op">:</span> <span class="kw">public</span> <span class="bu">std::</span>variant<span class="op">&lt;</span>K_App1<span class="op">,</span> K_App2<span class="op">,</span> K_Bop1<span class="op">,</span> K_Bop2<span class="op">,</span> K_If1<span class="op">,</span> K_If2<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb37-83"><a href="#cb37-83" aria-hidden="true" tabindex="-1"></a>  <span class="kw">using</span> variant<span class="op">::</span>variant<span class="op">;</span></span>
+<span id="cb37-84"><a href="#cb37-84" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+      <p>Now we need to encode the three tail recursive functions
+      <code>applyK</code>, <code>applyK'</code> and <code>go</code> into
+      a single loop body. We do this by writing an infinite loop and
+      having a switch inside that dispatches to the right label:</p>
+      <div class="sourceCode" id="cb38"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Exp<span class="op">&gt;</span> convert<span class="op">(</span>ast<span class="op">::</span>Exp <span class="op">&amp;</span>root<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ... Combined parameters for apply_k2, apply_k, and go normalized ...</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">enum</span> <span class="op">{</span> APPLY_K2<span class="op">,</span> APPLY_K<span class="op">,</span> GO <span class="op">}</span> dispatch <span class="op">=</span> GO<span class="op">;</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> <span class="op">(</span><span class="kw">true</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> <span class="op">(</span>dispatch<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> APPLY_K2<span class="op">:</span> <span class="op">{</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ... translated code for function `applyK&#39;` ...</span></span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> APPLY_K<span class="op">:</span> <span class="op">{</span></span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ... translated code for function `applyK` ...</span></span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> GO<span class="op">:</span> <span class="op">{</span></span>
+<span id="cb38-17"><a href="#cb38-17" aria-hidden="true" tabindex="-1"></a>      <span class="co">// ... translated code for function `go` ...</span></span>
+<span id="cb38-18"><a href="#cb38-18" aria-hidden="true" tabindex="-1"></a>      <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb38-19"><a href="#cb38-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb38-20"><a href="#cb38-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb38-21"><a href="#cb38-21" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb38-22"><a href="#cb38-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">nullptr</span><span class="op">;</span></span>
+<span id="cb38-23"><a href="#cb38-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>When tail calling, the function frame in the stack gets popped
+      before jumping to the next function, so everything outside of the
+      parameters to the tail call is “forgotten”. Because of that, we
+      only need to define a union of all function parameters as
+      variables outside the loop and when doing a tail call we
+      destructively overwrite the variables that are the parameters and
+      set the dispatch to the label of the next function.</p>
+      <ul>
+      <li><code>go</code> takes in a <code>ast::Exp*</code> (we do not
+      need to own the passed in AST expression), <code>K</code>, and
+      <code>K2</code></li>
+      <li><code>applyK'</code> takes in a <code>K2</code> and a
+      <code>std::unique_ptr&lt;anf::Exp&gt;</code></li>
+      <li><code>applyK</code> takes in a <code>K</code>,
+      <code>anf::Value</code>, and <code>K2</code></li>
+      </ul>
+      <p>The union of these parameters is a <code>ast::Exp*</code>,
+      <code>K</code>, <code>K2</code>,
+      <code>std::unique_ptr&lt;anf::Exp&gt;</code>, and a
+      <code>Value</code>. So these variables are defined outside the
+      infinite loop:</p>
+      <div class="sourceCode" id="cb39"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a>ast<span class="op">::</span>Exp <span class="op">*</span>go_exp <span class="op">=</span> <span class="op">&amp;</span>root<span class="op">;</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>anf<span class="op">::</span>Exp<span class="op">&gt;</span> k2_exp<span class="op">;</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>K k<span class="op">;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>K2 k2<span class="op">;</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>Value value<span class="op">;</span></span></code></pre></div>
+      <p>Now to handle the cases for <code>applyK</code>,
+      <code>applyK'</code>, and <code>go</code>. Let’s start with
+      <code>go</code>. The body for <code>go</code> simply visits the
+      <code>go_exp</code> variable and handles every possible expression
+      type:</p>
+      <div class="sourceCode" id="cb40"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> GO<span class="op">:</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>visit<span class="op">(</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>      overloaded<span class="op">{</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>          <span class="op">[&amp;](</span>ast<span class="op">::</span>IntExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>            value <span class="op">=</span> IntValue<span class="op">{</span>exp<span class="op">.</span>value<span class="op">};</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>            dispatch <span class="op">=</span> APPLY_K<span class="op">;</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>          <span class="op">},</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>          <span class="op">[&amp;](</span>ast<span class="op">::</span>VarExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>            value <span class="op">=</span> VarValue<span class="op">{</span>exp<span class="op">.</span>name<span class="op">};</span></span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>            dispatch <span class="op">=</span> APPLY_K<span class="op">;</span></span>
+<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a>          <span class="op">},</span></span>
+<span id="cb40-12"><a href="#cb40-12" aria-hidden="true" tabindex="-1"></a>          <span class="co">// ... rest of the cases ...</span></span>
+<span id="cb40-13"><a href="#cb40-13" aria-hidden="true" tabindex="-1"></a>      <span class="op">},</span></span>
+<span id="cb40-14"><a href="#cb40-14" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>go_exp<span class="op">);</span></span>
+<span id="cb40-15"><a href="#cb40-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">break</span><span class="op">;</span></span></code></pre></div>
+      <p>The first two cases are filled in, which correspond to the
+      equivalent code in Standard ML:</p>
+      <div class="sourceCode" id="cb41"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a>  L.Int i =&gt; applyK k (Int i) k&#39;</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>| L.Var v =&gt; applyK k (Var v) k&#39;</span></code></pre></div>
+      <p><code>k</code> and <code>k'</code> are not changed in the
+      function so they are not modified. The <code>value</code> variable
+      is overwritten to <code>IntValue</code> or <code>VarValue</code>.
+      Then we set dispatch to <code>APPLY_K</code> to simulate “calling”
+      the <code>applyK</code> function since the switch statement will
+      jump to the <code>APPLY_K</code> label when the code goes back
+      around to the start of the loop.</p>
+      <p>Let’s apply the same process to the <code>LamExp</code>
+      branch:</p>
+      <div class="sourceCode" id="cb42"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a>| L.Lam (v, body) =&gt; go body (K&#39;_Lam1 {k = k, v = v} :: k&#39;) []</span></code></pre></div>
+      <p>Since <code>go</code> is called recursively inside
+      <code>go</code>, <code>dispatch</code> doesn’t need to be
+      modified. However <code>go_exp</code>, <code>k</code>, and
+      <code>k'</code> need to be modified. First we set
+      <code>go_exp</code> to the expression’s body as a pointer. Then we
+      swap the <code>k</code> variable with an empty vector and put its
+      old value into <code>oldK</code>. We mentioned earlier that we
+      will convert consing onto a list in Standard ML to pushing to the
+      end of a vector in C++ so we move <code>oldK</code> into a
+      <code>K2_Lam1</code> type and then push it to the back of
+      <code>k2</code>. We can do this without having to construct an
+      intermediate struct using <code>.emplace_back()</code> and
+      <code>std::in_place_type</code>:</p>
+      <div class="sourceCode" id="cb43"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>ast<span class="op">::</span>LamExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> exp<span class="op">.</span>body<span class="op">.</span>get<span class="op">();</span></span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>  K oldK<span class="op">;</span></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>swap<span class="op">(</span>oldK<span class="op">);</span></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_Lam1<span class="op">&gt;,</span> <span class="bu">std::</span>move<span class="op">(</span>oldK<span class="op">),</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a>                  exp<span class="op">.</span>param<span class="op">);</span></span>
+<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The rest of the cases set <code>go_exp</code> to an expression
+      child, push to the back of <code>k</code> and recurse with
+      <code>go</code>:</p>
+      <div class="sourceCode" id="cb44"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a>| L.App (f, x) =&gt; go f k&#39; (K_App1 {x = x} :: k)</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>| L.Bop (bop, x, y) =&gt; go x k&#39; (K_Bop1 {y = y, bop = bop} :: k)</span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>| L.If (c, t, f) =&gt; go c k&#39; (K_If1 {t = t, f = f} :: k)</span></code></pre></div>
+      <div class="sourceCode" id="cb45"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>ast<span class="op">::</span>AppExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> exp<span class="op">.</span>fn<span class="op">.</span>get<span class="op">();</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_App1<span class="op">&gt;,</span> <span class="op">*</span>exp<span class="op">.</span>arg<span class="op">);</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>ast<span class="op">::</span>BopExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> exp<span class="op">.</span>arg1<span class="op">.</span>get<span class="op">();</span></span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_Bop1<span class="op">&gt;,</span> <span class="op">*</span>exp<span class="op">.</span>arg2<span class="op">,</span> exp<span class="op">.</span>bop<span class="op">);</span></span>
+<span id="cb45-8"><a href="#cb45-8" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb45-9"><a href="#cb45-9" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>ast<span class="op">::</span>IfExp <span class="op">&amp;</span>exp<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb45-10"><a href="#cb45-10" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> exp<span class="op">.</span>cond<span class="op">.</span>get<span class="op">();</span></span>
+<span id="cb45-11"><a href="#cb45-11" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_If1<span class="op">&gt;,</span> <span class="op">*</span>exp<span class="op">.</span>then<span class="op">,</span> <span class="op">*</span>exp<span class="op">.</span>els<span class="op">);</span></span>
+<span id="cb45-12"><a href="#cb45-12" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>For the <code>applyK</code> branch, we first check if
+      <code>k</code> is empty. If it is, they we handle the empty list
+      case:</p>
+      <div class="sourceCode" id="cb46"><pre
+      class="sourceCode language-sml"><code class="sourceCode language-sml"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a>applyK [] value k&#39; = applyK&#39; k&#39; (Halt value)</span></code></pre></div>
+      <p>Otherwise we pop the last frame of the vector and handle all
+      the possible <code>KFrame</code> variants with
+      <code>std::visit</code>. This is equivalent to the Standard ML
+      code that pattern matches on the list of frames:</p>
+      <div class="sourceCode" id="cb47"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> APPLY_K<span class="op">:</span> <span class="op">{</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>k<span class="op">.</span>empty<span class="op">())</span> <span class="op">{</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>    k2_exp <span class="op">=</span> make<span class="op">(</span>HaltExp<span class="op">{</span>value<span class="op">});</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>    dispatch <span class="op">=</span> APPLY_K2<span class="op">;</span></span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> frame <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k<span class="op">.</span>back<span class="op">());</span></span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>pop_back<span class="op">();</span></span>
+<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>visit<span class="op">(</span></span>
+<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a>      overloaded<span class="op">{</span></span>
+<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ... cases for KFrame variants ...</span></span>
+<span id="cb47-12"><a href="#cb47-12" aria-hidden="true" tabindex="-1"></a>      <span class="op">},</span></span>
+<span id="cb47-13"><a href="#cb47-13" aria-hidden="true" tabindex="-1"></a>      frame<span class="op">);</span></span>
+<span id="cb47-14"><a href="#cb47-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb47-15"><a href="#cb47-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Now we start filling in each KFrame case. Starting with
+      <code>K_App1</code>, it calls <code>go</code> with the frame’s
+      expression and with <code>K_App2</code> pushed to
+      <code>k</code>:</p>
+      <div class="sourceCode" id="cb48"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_App1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> <span class="op">&amp;</span>frame<span class="op">.</span>x<span class="op">;</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_App2<span class="op">&gt;,</span> <span class="bu">std::</span>move<span class="op">(</span>value<span class="op">));</span></span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> GO<span class="op">;</span></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The <code>K_App2</code> case pattern matches on the value
+      passed into <code>K_App2</code> to check if the function to apply
+      is a named variable. To do this we use a nested
+      <code>std::visit</code> over <code>Value</code>s:</p>
+      <div class="sourceCode" id="cb49"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_App2 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>visit<span class="op">(</span>overloaded<span class="op">{[&amp;](</span>VarValue <span class="op">&amp;</span>f<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a>                          <span class="kw">auto</span> r <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a>                          k2<span class="op">.</span>emplace_back<span class="op">(</span></span>
+<span id="cb49-5"><a href="#cb49-5" aria-hidden="true" tabindex="-1"></a>                              <span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_App1<span class="op">&gt;,</span> r<span class="op">,</span></span>
+<span id="cb49-6"><a href="#cb49-6" aria-hidden="true" tabindex="-1"></a>                              f<span class="op">.</span>var<span class="op">,</span> <span class="bu">std::</span>move<span class="op">(</span>value<span class="op">));</span></span>
+<span id="cb49-7"><a href="#cb49-7" aria-hidden="true" tabindex="-1"></a>                          value <span class="op">=</span> VarValue<span class="op">{</span>r<span class="op">};</span></span>
+<span id="cb49-8"><a href="#cb49-8" aria-hidden="true" tabindex="-1"></a>                        <span class="op">},</span></span>
+<span id="cb49-9"><a href="#cb49-9" aria-hidden="true" tabindex="-1"></a>                        <span class="op">[](</span><span class="kw">auto</span> <span class="op">&amp;)</span> <span class="op">{</span></span>
+<span id="cb49-10"><a href="#cb49-10" aria-hidden="true" tabindex="-1"></a>                          <span class="cf">throw</span> <span class="bu">std::</span>runtime_error<span class="op">(</span></span>
+<span id="cb49-11"><a href="#cb49-11" aria-hidden="true" tabindex="-1"></a>                              <span class="st">&quot;must apply named value&quot;</span><span class="op">);</span></span>
+<span id="cb49-12"><a href="#cb49-12" aria-hidden="true" tabindex="-1"></a>                        <span class="op">}},</span></span>
+<span id="cb49-13"><a href="#cb49-13" aria-hidden="true" tabindex="-1"></a>             frame<span class="op">.</span>f<span class="op">);</span></span>
+<span id="cb49-14"><a href="#cb49-14" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The <code>K_Bop1</code> case calls <code>go</code> on the
+      second parameter of the binop and pushes <code>K_Bop2</code> to
+      <code>k</code>:</p>
+      <div class="sourceCode" id="cb50"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_Bop1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> <span class="op">&amp;</span>frame<span class="op">.</span>y<span class="op">;</span></span>
+<span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_Bop2<span class="op">&gt;,</span> <span class="bu">std::</span>move<span class="op">(</span>value<span class="op">),</span></span>
+<span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>                 frame<span class="op">.</span>bop<span class="op">);</span></span>
+<span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> GO<span class="op">;</span></span>
+<span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The next two cases <code>K_Bop2</code> and <code>K_If1</code>
+      push to <code>k2</code> and recurse with <code>applyK</code>
+      applied to the next <code>k</code> and a fresh variable. Since
+      <code>k</code> was already popped before, it doesn’t have to be
+      modified in these cases:</p>
+      <div class="sourceCode" id="cb51"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_Bop2 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> r <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_Bop1<span class="op">&gt;,</span> r<span class="op">,</span> frame<span class="op">.</span>bop<span class="op">,</span></span>
+<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>x<span class="op">),</span> <span class="bu">std::</span>move<span class="op">(</span>value<span class="op">));</span></span>
+<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a>  value <span class="op">=</span> VarValue<span class="op">{</span>r<span class="op">};</span></span>
+<span id="cb51-6"><a href="#cb51-6" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb51-7"><a href="#cb51-7" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_If1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb51-8"><a href="#cb51-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> j <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb51-9"><a href="#cb51-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> p <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb51-10"><a href="#cb51-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb51-11"><a href="#cb51-11" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_If1<span class="op">&gt;,</span> frame<span class="op">.</span>t<span class="op">,</span> frame<span class="op">.</span>f<span class="op">,</span></span>
+<span id="cb51-12"><a href="#cb51-12" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>j<span class="op">),</span> p<span class="op">,</span> <span class="bu">std::</span>move<span class="op">(</span>value<span class="op">));</span></span>
+<span id="cb51-13"><a href="#cb51-13" aria-hidden="true" tabindex="-1"></a>  value <span class="op">=</span> VarValue<span class="op">{</span>p<span class="op">};</span></span>
+<span id="cb51-14"><a href="#cb51-14" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>We have to be careful to only assign <code>value</code> after
+      moving the old value into the frame pushed into <code>k2</code>.
+      Mixing up the order of modifications can cause the wrong value to
+      be in the frame.</p>
+      <p>The last case <code>K_If2</code> calls <code>applyK'</code>
+      with a jump expression without pushing to <code>k2</code>.
+      <code>applyK'</code> doesn’t use <code>k</code>,
+      <code>go_exp</code>, or <code>value</code> but there is no need to
+      clear out these variables; they will just be ignored in all the
+      <code>applyK'</code> cases.</p>
+      <div class="sourceCode" id="cb52"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K_If2 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>  k2_exp <span class="op">=</span> make<span class="op">(</span>JumpExp<span class="op">{.</span>joinName <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>j<span class="op">),</span></span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>                        <span class="op">.</span>slotValue <span class="op">=</span> <span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>value<span class="op">)}});</span></span>
+<span id="cb52-4"><a href="#cb52-4" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> APPLY_K2<span class="op">;</span></span>
+<span id="cb52-5"><a href="#cb52-5" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The <code>applyK'</code> structure is similar to the structure
+      of <code>applyK</code> in that it first checks and handles the
+      case where <code>k2</code> is empty and otherwise pops the last
+      frame off of <code>k2</code> and visits all variants of it. The
+      main difference is that when <code>k2</code> is empty the final
+      ANF expression is returned, breaking out of the whole state
+      machine loop.</p>
+      <div class="sourceCode" id="cb53"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> APPLY_K2<span class="op">:</span> <span class="op">{</span></span>
+<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>k2<span class="op">.</span>empty<span class="op">())</span> <span class="op">{</span></span>
+<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> k2_exp<span class="op">;</span></span>
+<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> frame <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k2<span class="op">.</span>back<span class="op">());</span></span>
+<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>pop_back<span class="op">();</span></span>
+<span id="cb53-7"><a href="#cb53-7" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>visit<span class="op">(</span></span>
+<span id="cb53-8"><a href="#cb53-8" aria-hidden="true" tabindex="-1"></a>      overloaded<span class="op">{</span></span>
+<span id="cb53-9"><a href="#cb53-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ... cases for K2Frame variants ...</span></span>
+<span id="cb53-10"><a href="#cb53-10" aria-hidden="true" tabindex="-1"></a>      <span class="op">},</span></span>
+<span id="cb53-11"><a href="#cb53-11" aria-hidden="true" tabindex="-1"></a>      frame<span class="op">);</span></span>
+<span id="cb53-12"><a href="#cb53-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb53-13"><a href="#cb53-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>In the first case <code>K2_Lam1</code>, <code>applyK</code> is
+      called with the stack of frames held inside <code>k2</code>’s
+      frame. The old value of <code>k</code> is discarded, which is fine
+      because <code>k</code> is forgotten in the <code>applyK'</code>
+      context anyway.</p>
+      <div class="sourceCode" id="cb54"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_Lam1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> f <span class="op">=</span> fresh<span class="op">();</span></span>
+<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>  k <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>k<span class="op">);</span></span>
+<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>  value <span class="op">=</span> VarValue<span class="op">{</span>f<span class="op">};</span></span>
+<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_Lam2<span class="op">&gt;,</span> f<span class="op">,</span> frame<span class="op">.</span>v<span class="op">,</span></span>
+<span id="cb54-6"><a href="#cb54-6" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">));</span></span>
+<span id="cb54-7"><a href="#cb54-7" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> APPLY_K<span class="op">;</span></span>
+<span id="cb54-8"><a href="#cb54-8" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The next three cases, <code>K2_Lam2</code>,
+      <code>K2_App1</code>, and <code>K2_Bop1</code> recursively calls
+      itself with its expression wrapped in a larger expression that
+      also contains parts of the variables in the frame.</p>
+      <div class="sourceCode" id="cb55"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_Lam2 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>  k2_exp <span class="op">=</span> make<span class="op">(</span>FunExp<span class="op">{.</span>name <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>f<span class="op">),</span></span>
+<span id="cb55-3"><a href="#cb55-3" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>params <span class="op">=</span> <span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>v<span class="op">)},</span></span>
+<span id="cb55-4"><a href="#cb55-4" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>body <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>body<span class="op">),</span></span>
+<span id="cb55-5"><a href="#cb55-5" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>rest <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">)});</span></span>
+<span id="cb55-6"><a href="#cb55-6" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb55-7"><a href="#cb55-7" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_App1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb55-8"><a href="#cb55-8" aria-hidden="true" tabindex="-1"></a>  k2_exp <span class="op">=</span> make<span class="op">(</span>AppExp<span class="op">{.</span>name <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>r<span class="op">),</span></span>
+<span id="cb55-9"><a href="#cb55-9" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>funName <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>f<span class="op">),</span></span>
+<span id="cb55-10"><a href="#cb55-10" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>paramValues <span class="op">=</span> <span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>x<span class="op">)},</span></span>
+<span id="cb55-11"><a href="#cb55-11" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>rest <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">)});</span></span>
+<span id="cb55-12"><a href="#cb55-12" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb55-13"><a href="#cb55-13" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_Bop1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb55-14"><a href="#cb55-14" aria-hidden="true" tabindex="-1"></a>  k2_exp <span class="op">=</span> make<span class="op">(</span>BopExp<span class="op">{.</span>name <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>r<span class="op">),</span></span>
+<span id="cb55-15"><a href="#cb55-15" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>bop <span class="op">=</span> frame<span class="op">.</span>bop<span class="op">,</span></span>
+<span id="cb55-16"><a href="#cb55-16" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>param1 <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>x<span class="op">),</span></span>
+<span id="cb55-17"><a href="#cb55-17" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>param2 <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>y<span class="op">),</span></span>
+<span id="cb55-18"><a href="#cb55-18" aria-hidden="true" tabindex="-1"></a>                       <span class="op">.</span>rest <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">)});</span></span>
+<span id="cb55-19"><a href="#cb55-19" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The next two cases <code>K2_If1</code> and <code>K2_If2</code>
+      call <code>go</code> with <code>k</code> having only one element
+      in the stack. This is done by clearing the old value of
+      <code>k</code> and pushing a single frame.</p>
+      <div class="sourceCode" id="cb56"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_If1 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> <span class="op">&amp;</span>frame<span class="op">.</span>t<span class="op">;</span></span>
+<span id="cb56-3"><a href="#cb56-3" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_If2<span class="op">&gt;,</span> frame<span class="op">.</span>f<span class="op">,</span> frame<span class="op">.</span>j<span class="op">,</span></span>
+<span id="cb56-4"><a href="#cb56-4" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>p<span class="op">),</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>c<span class="op">),</span></span>
+<span id="cb56-5"><a href="#cb56-5" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">));</span></span>
+<span id="cb56-6"><a href="#cb56-6" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>clear<span class="op">();</span></span>
+<span id="cb56-7"><a href="#cb56-7" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_If2<span class="op">&gt;,</span> frame<span class="op">.</span>j<span class="op">);</span></span>
+<span id="cb56-8"><a href="#cb56-8" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> GO<span class="op">;</span></span>
+<span id="cb56-9"><a href="#cb56-9" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span>
+<span id="cb56-10"><a href="#cb56-10" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_If2 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb56-11"><a href="#cb56-11" aria-hidden="true" tabindex="-1"></a>  go_exp <span class="op">=</span> <span class="op">&amp;</span>frame<span class="op">.</span>f<span class="op">;</span></span>
+<span id="cb56-12"><a href="#cb56-12" aria-hidden="true" tabindex="-1"></a>  k2<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K2_If3<span class="op">&gt;,</span> <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">),</span></span>
+<span id="cb56-13"><a href="#cb56-13" aria-hidden="true" tabindex="-1"></a>                  frame<span class="op">.</span>j<span class="op">,</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>p<span class="op">),</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>c<span class="op">),</span></span>
+<span id="cb56-14"><a href="#cb56-14" aria-hidden="true" tabindex="-1"></a>                  <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>rest<span class="op">));</span></span>
+<span id="cb56-15"><a href="#cb56-15" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>clear<span class="op">();</span></span>
+<span id="cb56-16"><a href="#cb56-16" aria-hidden="true" tabindex="-1"></a>  k<span class="op">.</span>emplace_back<span class="op">(</span><span class="bu">std::</span>in_place_type<span class="op">&lt;</span>K_If2<span class="op">&gt;,</span> frame<span class="op">.</span>j<span class="op">);</span></span>
+<span id="cb56-17"><a href="#cb56-17" aria-hidden="true" tabindex="-1"></a>  dispatch <span class="op">=</span> GO<span class="op">;</span></span>
+<span id="cb56-18"><a href="#cb56-18" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>The last case, <code>K2_If3</code> recursively calls itself
+      with its expression wrapped in a join and a if expression
+      containing the rest of the variables in the frame.</p>
+      <div class="sourceCode" id="cb57"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="op">[&amp;](</span>K2_If3 <span class="op">&amp;</span>frame<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a>  k2_exp <span class="op">=</span> make<span class="op">(</span>JoinExp<span class="op">{</span></span>
+<span id="cb57-3"><a href="#cb57-3" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span>name <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>j<span class="op">),</span></span>
+<span id="cb57-4"><a href="#cb57-4" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span>slot <span class="op">=</span> <span class="op">{</span><span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>p<span class="op">)},</span></span>
+<span id="cb57-5"><a href="#cb57-5" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span>body <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>rest<span class="op">),</span></span>
+<span id="cb57-6"><a href="#cb57-6" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span>rest <span class="op">=</span> make<span class="op">(</span>IfExp<span class="op">{.</span>cond <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>c<span class="op">),</span></span>
+<span id="cb57-7"><a href="#cb57-7" aria-hidden="true" tabindex="-1"></a>                         <span class="op">.</span>thenBranch <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>frame<span class="op">.</span>t<span class="op">),</span></span>
+<span id="cb57-8"><a href="#cb57-8" aria-hidden="true" tabindex="-1"></a>                         <span class="op">.</span>elseBranch <span class="op">=</span> <span class="bu">std::</span>move<span class="op">(</span>k2_exp<span class="op">)})});</span></span>
+<span id="cb57-9"><a href="#cb57-9" aria-hidden="true" tabindex="-1"></a><span class="op">},</span></span></code></pre></div>
+      <p>With this, the ANF conversion function is complete. The full
+      code can be seen <a
+      href="https://github.com/DarinM223/lambcalc-cpp/blob/e2c3aa196e814dfbf627b649fd0c92c391a39552/src/anf.cpp#L119-L378">here</a>.</p>
+      <p>There are some ways to optimize this implementation further.
+      Instead of encoding the conversion as an infinite loop with a
+      switch statement to dispatch to the right function, we could use
+      computed goto to jump to the relevant label. We could also use
+      clang’s <code>musttail</code> or Rust’s explicit tail calls to
+      dispatch between the <code>go</code>, <code>applyK</code> and
+      <code>applyK'</code> cases, since at that point each function can
+      have the same type signature. I chose the loop and switch method
+      for this post so I can show that defunctionalization can work with
+      any imperative language with a loop construct.</p>
+      <h2 id="conclusion">Conclusion</h2>
+      <p>We were able to write expressive code for doing ANF conversion
+      in Standard ML, a functional language, and through a series of
+      mostly mechanical transformations, convert it into stack-safe code
+      in C++. This technique can also be used to generate code in other
+      less-expressive languages like C, Rust, Java, Go, Python, etc.
+      Unlike other methods like trampolining, the resulting code is
+      directly expressed as a loop with little obvious performance
+      pitfalls. I think CPS conversion and defunctionalization are
+      useful techniques to know in order to reliably solve functional
+      programming problems in languages that are more likely to be used
+      in jobs.</p>
+    </div>
+  </div>
+  <script src="static/js/prism.js"></script>
+</body>
+
+
+</html>

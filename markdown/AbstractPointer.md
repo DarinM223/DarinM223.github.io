@@ -173,3 +173,126 @@ int main() {
   printNode(n2);
 }
 ```
+
+Finally, we don't have to hardcode the node's data as a `int32_t`, that
+was only to make the C declaration simpler. In C++, it can be generic with another
+template parameter:
+
+```cpp
+template <typename T, template <class> class Ptr = std::unique_ptr>
+struct Node {
+  T data;
+  Ptr<Node<T, Ptr>> left;
+  Ptr<Node<T, Ptr>> right;
+};
+
+int main() {
+  auto n1 = std::make_unique<Node<int32_t>>(Node<int32_t>{
+      1, std::make_unique<Node<int32_t>>(Node<int32_t>{2, nullptr, nullptr}),
+      std::make_unique<Node<int32_t>>(Node<int32_t>{3, nullptr, nullptr})});
+  printNode(*n1);
+
+  Node<int32_t, raw_ptr> left{2, nullptr, nullptr};
+  Node<int32_t, raw_ptr> right{3, nullptr, nullptr};
+  Node<int32_t, raw_ptr> n2{1, &left, &right};
+  printNode(n2);
+}
+```
+
+In Rust, abstracting over nodes isn't so simple. C++ templates essentially copy and paste
+the specialized type where the template is in the function and check if the result compiles.
+In Rust, you have to specify the behavior that you want to abstract over using a trait. For
+our example, we want trait methods for getting the left, right, and data fields of the type
+implementing our trait:
+
+```rust
+trait NodeOps<T> {
+    fn data(&self) -> &T;
+    fn left(&self) -> &Option<impl Deref<Target = Self>>;
+    fn right(&self) -> &Option<impl Deref<Target = Self>>;
+}
+```
+
+To abstract over pointer types, we use `impl Deref` in the return types of `left()` and `right()`.
+That will work with `Box`, `Rc`, `bumpalo::boxed::Box`, `&'a T`, etc.
+
+Now that we have our node trait, we can write our function:
+
+```rust
+fn print_node<T: Debug, Node: NodeOps<T>>(node: &Node) {
+    println!("{:?}", node.data());
+    if let Some(left) = node.left() {
+        print_node(left.deref());
+    }
+    if let Some(right) = node.right() {
+        print_node(right.deref());
+    }
+}
+```
+
+And for each node type, if we implement `NodeOps` we can use `print_node` with them.
+
+```rust
+struct Node<T> {
+    data: T,
+    left: Option<Box<Node<T>>>,
+    right: Option<Box<Node<T>>>,
+}
+
+impl<T> NodeOps<T> for Node<T> {
+    fn data(&self) -> &T {
+        &self.data
+    }
+
+    fn left(&self) -> &Option<impl Deref<Target = Self>> {
+        &self.left
+    }
+
+    fn right(&self) -> &Option<impl Deref<Target = Self>> {
+        &self.right
+    }
+}
+
+struct Node2<'a, T> {
+    data: T,
+    left: Option<&'a Node2<'a, T>>,
+    right: Option<&'a Node2<'a, T>>,
+}
+
+impl<'a, T> NodeOps<T> for Node2<'a, T> {
+    fn data(&self) -> &T {
+        &self.data
+    }
+
+    fn left(&self) -> &Option<impl Deref<Target = Self>> {
+        &self.left
+    }
+
+    fn right(&self) -> &Option<impl Deref<Target = Self>> {
+        &self.right
+    }
+}
+```
+
+But what if we don't want to duplicate the node type for each
+pointer type? In C++ we used `template<class> class`
+for template parameters that themselves take in a template parameter.
+How do we do this in Rust?
+
+In other languages like Haskell, higher kinded types are used
+to abstract over containers of types. In Rust we can simulate
+higher kinded types with GATs.
+
+```rust
+trait Ptr {
+    type T<'a, U: 'a>: Deref<Target = U>;
+}
+```
+
+```rust
+struct Node<'a, T: 'a, P: Ptr + 'a> {
+    data: T,
+    left: Option<P::T<'a, Node<'a, T, P>>>,
+    right: Option<P::T<'a, Node<'a, T, P>>>,
+}
+```

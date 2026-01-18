@@ -105,13 +105,13 @@ void print_node(const node *node)
 Whereas functions that take in nodes using owned container types
 won't work with other types. Because C++ and Rust heavily favor
 using owned types, its easy to start off with them but when you want
-to switch to an arena allocator, its difficult to refactor all the
+to switch to an arena allocator, it can be difficult to refactor all the
 types to a non owned type. And if you want a function to work with
-multiple pointer types for things like benchmarking, you will have to
-manually duplicate the function for each type.
+multiple pointer types, you may end up
+manually duplicating the function for each type.
 
-C++ and Rust will have to leverage their type
-systems to be generic over various smart pointer types as
+It doesn't have to be that way though. C++ and Rust are powerful enough
+to be able to abstract over various smart pointer types as
 well as raw pointers. Starting with C++, a
 single template parameter can be used to generically print any type with a
 printable `data` field and
@@ -207,7 +207,7 @@ int main() {
 }
 ```
 
-In Rust, abstracting over nodes isn't so simple. C++ templates essentially copy and paste
+In Rust, abstracting over nodes isn't as simple. C++ templates essentially copy and paste
 the specialized type where the template is in the function and check if the result compiles.
 In Rust, you have to specify the behavior that you want to abstract over using a trait. For
 our example, we want trait methods for getting the left, right, and data fields of the type
@@ -421,4 +421,21 @@ fn main() {
     node.print();
 }
 ```
+
+The `Ptr` trait works well with trees like abstract syntax trees, but doesn't work as well with cyclical data structures
+like graphs. A wrapper around `*mut T` that implements `Deref`
+and `DerefMut` can work, but that would expose unsafe code and
+is unidiomatic in Rust.
+
+One safe way to work with graphs are to use indices into
+a `Vec` of nodes as links. Then given the index, you can
+access the data through borrowing the `Vec` either immutably
+or mutably.
+
+Another way is to use `GhostCell` which controls access through
+a `GhostToken` type.
+
+Finally, `Rc<RefCell<T>>` can be used for links in graph structures. Borrowing doesn't require passing in a token,
+but it is done through a `borrow()` method which does runtime
+checking.
 

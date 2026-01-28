@@ -207,10 +207,10 @@ int main() {
 }
 ```
 
-In Rust, abstracting over nodes isn't as simple. C++ templates essentially copy and paste
+In Rust, abstracting over nodes also possible, but it isn't as simple as C++. C++ templates essentially copy and paste
 the specialized type where the template is in the function and check if the result compiles.
 In Rust, you have to specify the behavior that you want to abstract over using a trait. For
-our example, we want trait methods for getting the left, right, and data fields of the type
+our example, we would use trait methods for getting the left, right, and data fields of the type
 implementing our trait:
 
 ```rust
@@ -423,9 +423,12 @@ fn main() {
 ```
 
 The `Ptr` trait works well with trees like abstract syntax trees, but doesn't work as well with cyclical data structures
-like graphs. A wrapper around `*mut T` that implements `Deref`
+like graphs. A wrapper around raw pointers like `*mut T` that implements `Deref`
 and `DerefMut` can work, but that would expose unsafe code and
 is unidiomatic in Rust.
+
+If we want our `Ptr` trait to work with cyclical graphs in safe Rust,
+we should first list the ways that we can encode cycles in Rust:
 
 One safe way to work with graphs are to use indices into
 a `Vec` of nodes as links. Then given the index, you can
@@ -439,3 +442,95 @@ Finally, `Rc<RefCell<T>>` can be used for links in graph structures. Borrowing d
 but it is done through a `borrow()` method which does runtime
 checking.
 
+The `GhostToken` interface that passes in a token when borrowing can work with all three types. With the index into `Vec` approach, the
+`Vec` is required to borrow using the index, so the `Vec` can be
+thought of as the "token" similar to the token passed into the
+borrow methods of `GhostCell`. `Rc<RefCell<T>>` uses a borrow
+method with no arguments so its token can be the unit type `()`.
+
+So instead of our `Ptr` trait having a `Deref` constraint, we need
+a more general interface for borrowing from the pointer type with
+a token parameter. The `Borrow` and `BorrowMut` traits below are
+general enough to work with all of the types mentioned above.
+
+```rust
+trait BorrowSuper {
+    type Ref<'a, U: 'a>: Deref<Target = U>;
+}
+trait Borrow: BorrowSuper {
+    type Token;
+    type Target;
+    fn get<'a>(&'a self, token: &'a Self::Token) -> Self::Ref<'a, Self::Target>;
+}
+
+trait BorrowMutSuper {
+    type RefMut<'a, U: 'a>: Deref<Target = U> + DerefMut<Target = U>;
+}
+trait BorrowMut: BorrowMutSuper + Borrow {
+    fn get_mut<'a>(&'a self, token: &'a mut Self::Token) -> Self::RefMut<'a, Self::Target>;
+}
+
+trait Ptr {
+    type T<'a, 'b: 'a, U: 'a>: Borrow<Target = U>;
+}
+```
+
+`Borrow` splits off its `Ref` into `BorrowSuper` to work around issue [#87479](https://github.com/rust-lang/rust/issues/87479) which would require a `Self: 'a` constraint.
+
+The previous tree types and functions can be modified to work
+with this trait:
+
+```rust
+struct Node<'a, 'b: 'a, T: 'a, P: Ptr + 'a> {
+    data: T,
+    left: Option<P::T<'a, 'b, Node<'a, 'b, T, P>>>,
+    right: Option<P::T<'a, 'b, Node<'a, 'b, T, P>>>,
+}
+
+impl<'a, 'b, T: Debug, P: Ptr> Node<'a, 'b, T, P> {
+    fn print(&self, token: &'a <P::T<'a, 'b, Self> as Borrow>::Token) {
+        println!("{:?}", self.data);
+        if let Some(ref left) = self.left {
+            left.get(token).print(token);
+        }
+        if let Some(ref right) = self.right {
+            right.get(token).print(token);
+        }
+    }
+}
+```
+
+But now cyclical types like graphs can also work:
+
+```rust
+struct GraphNode<'a, 'b: 'a, T: 'a, P: Ptr + 'a> {
+    data: T,
+    edges: Vec<P::T<'a, 'b, GraphNode<'a, 'b, T, P>>>,
+}
+
+impl<'a, 'b, T: Copy + AddAssign<T>, P: Ptr> GraphNode<'a, 'b, T, P>
+where
+    P::T<'a, 'b, Self>: BorrowMut<Target = Self> + Clone,
+{
+    fn incr(this: P::T<'a, 'b, Self>, token: &mut <P::T<'a, 'b, Self> as Borrow>::Token) {
+        let data = this.get(token).data;
+        let edges = this.get(token).edges.clone();
+        for edge in edges.clone() {
+            edge.get_mut(token).data += data;
+        }
+        for edge in edges {
+            Self::incr(edge, token);
+        }
+    }
+}
+```
+
+The `incr` method runs forever with cyclical edges until it overflows the stack. A way to fix that would be to have a hashmap track the visited
+nodes, but the code right now is good enough for showing that the Rust compiler will accept this code without errors.
+
+Note that `clone` is called twice, which is something that would not be
+necessary if working directly with integer indices. That is because `P::T` is `Clone` not
+`Copy`. In Rust, `Copy` doesn't just mean that you can copy a type like
+in C++, it also means that a type doesn't implement `Drop`. Not having
+`Drop`, which is similar to destructors in C++, would simplify the lifetimes of `edge` in the function, but we can't use it because some of the pointer
+types don't implement `Copy`, and a custom implementation cannot be provided. So we have to call `clone` twice in order for it to compile.

@@ -427,18 +427,18 @@ like graphs. A wrapper around raw pointers like `*mut T` that implements `Deref`
 and `DerefMut` can work, but that would expose unsafe code and
 is unidiomatic in Rust.
 
-If we want our `Ptr` trait to work with cyclical graphs in safe Rust,
-we should first list the ways that we can encode cycles in Rust:
+If we want our `Ptr` trait to also work with cyclical graphs in Rust,
+we should first list the most common ways that we can safely encode cycles in Rust:
 
-One safe way to work with graphs are to use indices into
-a `Vec` of nodes as links. Then given the index, you can
+One way to work with graphs is to treat links or "pointers" as indices into
+a `Vec` of nodes. Then given the index, you can
 access the data through borrowing the `Vec` either immutably
-or mutably.
+or mutably. Because indices are essentially integers, they don't have lifetimes of the referenced data attached to them and can be copied around freely.
 
 Another way is to use `GhostCell` which controls access through
-a `GhostToken` type.
+a `GhostToken` type. The `GhostCell` can be borrowed immutably but still allow mutable access to its data if the passed in `GhostToken` is borrowed mutably. This allows for multiple immutable borrows of the same `GhostCell` that can still be mutably borrowed through the token.
 
-Finally, `Rc<RefCell<T>>` can be used for links in graph structures. Borrowing doesn't require passing in a token,
+Finally, reference counted types like `Rc<RefCell<T>>` can be used for links in graph structures. Borrowing doesn't require passing in a token,
 but it is done through a `borrow()` method which does runtime
 checking.
 
@@ -475,10 +475,12 @@ trait Ptr {
 }
 ```
 
-`Borrow` splits off its `Ref` into `BorrowSuper` to work around issue [#87479](https://github.com/rust-lang/rust/issues/87479) which would require a `Self: 'a` constraint.
+The main differences from the previous pointer trait is that `T` needs an additional lifetime for the `GhostCell`'s brand lifetime, `Borrow` has an associated type for the type of the token to be passed in, and `Borrow` also needs
+to abstract over returned reference types because `RefCell`'s borrow() doesn't return a borrow but a `std::cell::Ref` type.
 
-The previous tree types and functions can be modified to work
-with this trait:
+`Borrow` only splits off its `Ref` into `BorrowSuper` to work around issue [#87479](https://github.com/rust-lang/rust/issues/87479) which would forces a `Self: 'a` constraint. If this issue didn't exist we could put `Ref` directly inside `Borrow` without any problems.
+
+Now that we have a new pointer trait, the previous tree types and functions can be modified to work with it:
 
 ```rust
 struct Node<'a, 'b: 'a, T: 'a, P: Ptr + 'a> {
@@ -526,7 +528,7 @@ where
 ```
 
 The `incr` method runs forever with cyclical edges until it overflows the stack. A way to fix that would be to have a hashmap track the visited
-nodes, but the code right now is good enough for showing that the Rust compiler will accept this code without errors.
+nodes, but the code right now is sufficient for showing that the Rust compiler will allow working with cyclical edges without errors.
 
 Note that `clone` is called twice, which is something that would not be
 necessary if working directly with integer indices. That is because `P::T` is `Clone` not
@@ -534,3 +536,61 @@ necessary if working directly with integer indices. That is because `P::T` is `C
 in C++, it also means that a type doesn't implement `Drop`. Not having
 `Drop`, which is similar to destructors in C++, would simplify the lifetimes of `edge` in the function, but we can't use it because some of the pointer
 types don't implement `Copy`, and a custom implementation cannot be provided. So we have to call `clone` twice in order for it to compile.
+
+Finally we need to implement `Borrow` and `Ptr` for our types. Starting off with `GhostCell` which is the simplest of the three to implement:
+
+
+```rust
+impl<T> BorrowSuper for &GhostCell<'_, T> {
+    type Ref<'a, U: 'a> = &'a U;
+}
+impl<'brand, T> Borrow for &GhostCell<'brand, T> {
+    type Token = GhostToken<'brand>;
+    type Target = T;
+
+    fn get<'a>(&'a self, token: &'a Self::Token) -> &'a Self::Target {
+        self.borrow(token)
+    }
+}
+
+impl<T> BorrowMutSuper for &GhostCell<'_, T> {
+    type RefMut<'a, U: 'a> = &'a mut U;
+}
+impl<'brand, T> BorrowMut for &GhostCell<'brand, T> {
+    fn get_mut<'a>(&'a self, token: &'a mut Self::Token) -> &'a mut Self::Target {
+        self.borrow_mut(token)
+    }
+}
+
+struct GhostCellPtr;
+impl Ptr for GhostCellPtr {
+    type T<'a, 'b: 'a, U: 'a> = &'a GhostCell<'b, U>;
+}
+```
+
+For the index into Vec approach, the `slotmap` crate is used for convenience.
+
+```rust
+new_key_type! { struct GraphId; }
+struct GraphKey<T> {
+    id: GraphId,
+    _phantom: PhantomData<T>,
+}
+impl<T> Clone for GraphKey<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            _phantom: PhantomData,
+        }
+    }
+}
+impl<T> Copy for GraphKey<T> {}
+impl<T> From<GraphId> for GraphKey<T> {
+    fn from(value: GraphId) -> Self {
+        GraphKey {
+            id: value,
+            _phantom: PhantomData,
+        }
+    }
+}
+```

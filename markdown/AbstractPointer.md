@@ -537,8 +537,8 @@ in C++, it also means that a type doesn't implement `Drop`. Not having
 `Drop`, which is similar to destructors in C++, would simplify the lifetimes of `edge` in the function, but we can't use it because some of the pointer
 types don't implement `Copy`, and a custom implementation cannot be provided. So we have to call `clone` twice in order for it to compile.
 
-Finally we need to implement `Borrow` and `Ptr` for our types. Starting off with `GhostCell` which is the simplest of the three to implement:
-
+Finally we need to implement `Borrow` and `Ptr` for our types. Starting off with `GhostCell` which is the simplest of the three to implement. Borrowing from the token calls the
+related `borrow()` function from the `GhostCell`:
 
 ```rust
 impl<T> BorrowSuper for &GhostCell<'_, T> {
@@ -568,7 +568,8 @@ impl Ptr for GhostCellPtr {
 }
 ```
 
-For the index into Vec approach, the `slotmap` crate is used for convenience.
+For the index into Vec approach, the `slotmap` crate is used for convenience. The key type contains the index into the
+graph. Since we work with the keys as if they are pointers to nodes in the graph, the key type must be parametrized by the node type.
 
 ```rust
 new_key_type! { struct GraphId; }
@@ -576,21 +577,80 @@ struct GraphKey<T> {
     id: GraphId,
     _phantom: PhantomData<T>,
 }
-impl<T> Clone for GraphKey<T> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            _phantom: PhantomData,
-        }
+type GraphMap<T> = SlotMap<GraphId, T>;
+```
+
+Now we can implement `Borrow` and `BorrowMut` for `GraphKey`
+using the slotmap as the token. Borrowing from the index
+borrows from the token (`GraphMap`) using the key (`GraphId`), which is the opposite from `GhostCell`, which borrows from the key (`GhostCell`) using the token (`GhostToken`):
+
+```rust
+impl<T> BorrowSuper for GraphKey<T> {
+    type Ref<'a, U: 'a> = &'a U;
+}
+impl<T> Borrow for GraphKey<T> {
+    type Token = GraphMap<T>;
+    type Target = T;
+
+    fn get<'a>(&'a self, token: &'a Self::Token) -> &'a Self::Target {
+        token.get(self.id).unwrap()
     }
 }
-impl<T> Copy for GraphKey<T> {}
-impl<T> From<GraphId> for GraphKey<T> {
-    fn from(value: GraphId) -> Self {
-        GraphKey {
-            id: value,
-            _phantom: PhantomData,
-        }
+impl<T> BorrowMutSuper for GraphKey<T> {
+    type RefMut<'a, U: 'a> = &'a mut U;
+}
+impl<T> BorrowMut for GraphKey<T> {
+    fn get_mut<'a>(&'a self, token: &'a mut Self::Token) -> &'a mut Self::Target {
+        token.get_mut(self.id).unwrap()
     }
+}
+
+struct GraphKeyPtr;
+impl Ptr for GraphKeyPtr {
+    type T<'a, 'b: 'a, U: 'a> = GraphKey<U>;
+}
+```
+
+Finally, in order to implement `Borrow` and `BorrowMut` for `Rc<RefCell<T>>`, we have to
+have `std::cell::Ref` implement `Clone`. The type already allows for cloning but the trait isn't implemented because it copies the reference, not the data inside which can be confusing. We implement `Clone` by creating a newtype `CellRef` that wraps `std::cell::Ref`:
+
+```rust
+struct CellRef<'a, T>(std::cell::Ref<'a, T>);
+impl<T> Deref for CellRef<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+impl<T> Clone for CellRef<'_, T> {
+    fn clone(&self) -> Self {
+        Self(std::cell::Ref::clone(&self.0))
+    }
+}
+```
+
+```rust
+impl<T> BorrowSuper for Rc<RefCell<T>> {
+    type Ref<'a, U: 'a> = CellRef<'a, U>;
+}
+impl<T> Borrow for Rc<RefCell<T>> {
+    type Token = ();
+    type Target = T;
+
+    fn get<'a>(&'a self, _token: &'a Self::Token) -> Self::Ref<'a, Self::Target> {
+        CellRef(self.borrow())
+    }
+}
+impl<T> BorrowMutSuper for Rc<RefCell<T>> {
+    type RefMut<'a, U: 'a> = std::cell::RefMut<'a, U>;
+}
+impl<T> BorrowMut for Rc<RefCell<T>> {
+    fn get_mut<'a>(&'a self, _token: &'a mut Self::Token) -> Self::RefMut<'a, Self::Target> {
+        self.borrow_mut()
+    }
+}
+struct RcRefCellPtr;
+impl Ptr for RcRefCellPtr {
+    type T<'a, 'b: 'a, U: 'a> = Rc<RefCell<U>>;
 }
 ```

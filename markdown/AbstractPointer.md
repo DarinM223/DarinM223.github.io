@@ -629,6 +629,8 @@ impl<T> Clone for CellRef<'_, T> {
 }
 ```
 
+Now we can implement `Borrow` and `BorrowMut` that call the `RefCell`'s `borrow()` and `borrow_mut()` methods:
+
 ```rust
 impl<T> BorrowSuper for Rc<RefCell<T>> {
     type Ref<'a, U: 'a> = CellRef<'a, U>;
@@ -652,5 +654,29 @@ impl<T> BorrowMut for Rc<RefCell<T>> {
 struct RcRefCellPtr;
 impl Ptr for RcRefCellPtr {
     type T<'a, 'b: 'a, U: 'a> = Rc<RefCell<U>>;
+}
+```
+
+With these implementations, we can get the
+`print()` and `incr()` methods to compile with
+ghostcells, slotmaps, and reference counted pointers. The code for testing each implementation is shown [here](https://gist.github.com/DarinM223/cf720814cec736258603f618a13382ef#file-generic_ptr2-rs-L234-L329).
+
+It may seem like the `Ptr`, `Borrow`, and `BorrowMut` traits are
+capable of working with every possible way to encode mutable cyclical data.
+However, there is another way to work with cycles in Rust. The `Cell`
+type allows for the data inside to be mutated through an immutable
+reference as long as the inner data implements `Copy`. Here are
+some examples of defining our previously used tree and graph node types using `Cell`:
+
+```rust
+struct Node<T> {
+    data: T,
+    left: Cell<Option<Box<Node<T>>>>,
+    right: Cell<Option<Box<Node<T>>>>,
+}
+
+struct GraphNode<T> {
+    data: T,
+    edges: Cell<[Option<Box<GraphNode<T>>>; 10]>,
 }
 ```

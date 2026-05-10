@@ -680,3 +680,7 @@ struct GraphNode<T> {
     edges: Cell<[Option<Box<GraphNode<T>>>; 10]>,
 }
 ```
+
+The main thing to notice about these definitions is that unlike `GhostCell` the `Cell` is wrapping the
+whole type including the `Option`. If it isn't done that way you wouldn't be able to set a node to `None` from an immutable reference and
+wouldn't be able to encode cycles. The problem with this is that the structure of this link type is fundamentally different from the other pointer-like types. In order for `Cell` to work with our existing `Ptr` trait, every type that contains `P::T` would have to be moved so that `P::T` contains it instead. So for example, an `Option<P::T<'a, Node<'a, T, P>>>` would have to be translated into `P::T<'a, Option<Node<'a, T, P>>>`, `Option<Option<P::T<'a, Node<'a, T, P>>>>` would have to become `P::T<'a, Option<Option<Node<'a, T, P>>>>`, etc. I don't believe it is possible to do this conversion automatically through the trait system, and it probably wouldn't make sense to do so. So although the `Ptr` trait can work with many common types used for cyclical structures, it doesn't work with `Cell`.

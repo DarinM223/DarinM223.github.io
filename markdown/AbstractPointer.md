@@ -67,6 +67,7 @@ void print_node(const node *node)
 }
 ```
 
+{% raw %}
 ```c
 // Individual allocations through malloc
 {
@@ -101,6 +102,7 @@ void print_node(const node *node)
     print_node(root);
 }
 ```
+{% endraw %}
 
 Whereas functions that take in nodes using owned container types
 won't work with other types. Because C++ and Rust heavily favor

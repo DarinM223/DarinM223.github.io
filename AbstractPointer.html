@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title></title>
+  <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="static/css/prism.css">
+</head>
+
+<body>
+  <div class="wrapper">
+    <h1>Darin Minamoto</h1>
+    <div class="links">
+      <a href="./index.html">Home</a>
+      <a href="./about.html">About</a>
+      <a href="https://github.com/DarinM223">Github</a>
+    </div>
+
+    <div class="content">
+      <h3>Date: July 20, 2026</h3>
+      <h1 id="abstracting-over-pointer-types-in-c-and-rust">Abstracting
+      over pointer types in C++ and Rust</h1>
+      <p>Pointers have a very general interface. You can get a pointer
+      to something by taking its address, and you can dereference a
+      pointer to access the data at the address. Pointers don’t specify
+      whether the underlying data came from the stack or the heap,
+      whether the data was allocated in an arena allocator or a general
+      free-list allocator, or whether the pointer should be freed or
+      not. For example, here’s a tree data structure in C:</p>
+      <div class="sourceCode" id="cb1"><pre
+      class="sourceCode language-c"><code class="sourceCode language-c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="kw">struct</span> node node<span class="op">;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> node <span class="op">{</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int32_t</span> data<span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>left<span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>right<span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+      <p>From this type definition, it isn’t clear if a
+      <code>node</code> is responsible for cleaning up its left and
+      right pointers before being deallocated (aka <code>node</code>
+      <em>owns</em> its left and right pointers), or if the left and
+      right pointers will be deallocated separately. We can look for a
+      free function for <code>node</code>:</p>
+      <div class="sourceCode" id="cb2"><pre
+      class="sourceCode language-c"><code class="sourceCode language-c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> node_free<span class="op">(</span>node <span class="op">*</span>node<span class="op">)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>node<span class="op">-&gt;</span>left<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>        node_free<span class="op">(</span>node<span class="op">-&gt;</span>left<span class="op">);</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>node<span class="op">-&gt;</span>right<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>        node_free<span class="op">(</span>node<span class="op">-&gt;</span>right<span class="op">);</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    free<span class="op">(</span>node<span class="op">);</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>This looks like <code>node</code> owns its left and right
+      pointers… as long as the <code>node_free</code> function is called
+      on a <code>node</code>. In C you can simply not call a free
+      function for a type and that could mean that a <code>node</code>
+      is not intended to own its left and right pointers. Or it could be
+      a mistake and result in a memory leak. You will have to carefully
+      read both the code that uses a <code>node</code> and the various
+      helper functions for <code>node</code> to get a full understanding
+      of what is happening.</p>
+      <p>C++ and Rust attempt to make this process easier by having
+      special types for owned pointers. In C++, the example can be
+      written as:</p>
+      <div class="sourceCode" id="cb3"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int32_t</span> data<span class="op">;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Node<span class="op">&gt;</span> left<span class="op">;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Node<span class="op">&gt;</span> right<span class="op">;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+      <p><code>std::unique_ptr</code> is a container that automatically
+      deallocates its contained data when its destructor is called.
+      Having <code>left</code> and <code>right</code> as
+      <code>std::unique_ptr</code>s makes it explicit that
+      <code>Node</code> will always own its left and right pointers.</p>
+      <p>However encoding ownership and other low-level details in the
+      type system has a cost. In C, you can write a function that takes
+      in nodes and the function will work with all nodes regardless of
+      ownership.</p>
+      <div class="sourceCode" id="cb4"><pre
+      class="sourceCode language-c"><code class="sourceCode language-c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> print_node<span class="op">(</span><span class="dt">const</span> node <span class="op">*</span>node<span class="op">)</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>node <span class="op">==</span> NULL<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;</span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> node<span class="op">-&gt;</span>data<span class="op">);</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    print_node<span class="op">(</span>node<span class="op">-&gt;</span>left<span class="op">);</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    print_node<span class="op">(</span>node<span class="op">-&gt;</span>right<span class="op">);</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <div class="sourceCode" id="cb5"><pre
+      class="sourceCode language-c"><code class="sourceCode language-c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Individual allocations through malloc</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>root <span class="op">=</span> node_alloc<span class="op">(</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>left <span class="op">=</span> node_alloc<span class="op">(</span><span class="dv">2</span><span class="op">);</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>right <span class="op">=</span> node_alloc<span class="op">(</span><span class="dv">3</span><span class="op">);</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    assert<span class="op">(</span>root <span class="op">&amp;&amp;</span> left <span class="op">&amp;&amp;</span> right <span class="op">&amp;&amp;</span> <span class="st">&quot;allocation failed&quot;</span><span class="op">);</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    root<span class="op">-&gt;</span>left <span class="op">=</span> left<span class="op">;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    root<span class="op">-&gt;</span>right <span class="op">=</span> right<span class="op">;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    print_node<span class="op">(</span>root<span class="op">);</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    node_free<span class="op">(</span>root<span class="op">);</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="co">// Stack allocation</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>    node nodes<span class="op">[]</span> <span class="op">=</span> <span class="op">{{.</span>data <span class="op">=</span> <span class="dv">1</span><span class="op">},</span> <span class="op">{.</span>data <span class="op">=</span> <span class="dv">2</span><span class="op">},</span> <span class="op">{.</span>data <span class="op">=</span> <span class="dv">3</span><span class="op">}};</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    nodes<span class="op">[</span><span class="dv">0</span><span class="op">].</span>left <span class="op">=</span> <span class="op">&amp;</span>nodes<span class="op">[</span><span class="dv">1</span><span class="op">];</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>    nodes<span class="op">[</span><span class="dv">0</span><span class="op">].</span>right <span class="op">=</span> <span class="op">&amp;</span>nodes<span class="op">[</span><span class="dv">2</span><span class="op">];</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>    print_node<span class="op">(&amp;</span>nodes<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a><span class="co">// Arena allocation</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>    arena r <span class="op">=</span> arena_get<span class="op">();</span></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>root <span class="op">=</span> arena_alloc<span class="op">(&amp;</span>r<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>node<span class="op">),</span> <span class="kw">_Alignof</span><span class="op">(</span>node<span class="op">),</span> <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>left <span class="op">=</span> arena_alloc<span class="op">(&amp;</span>r<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>node<span class="op">),</span> <span class="kw">_Alignof</span><span class="op">(</span>node<span class="op">),</span> <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>    node <span class="op">*</span>right <span class="op">=</span> arena_alloc<span class="op">(&amp;</span>r<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>node<span class="op">),</span> <span class="kw">_Alignof</span><span class="op">(</span>node<span class="op">),</span> <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>    assert<span class="op">(</span>root <span class="op">&amp;&amp;</span> left <span class="op">&amp;&amp;</span> right <span class="op">&amp;&amp;</span> <span class="st">&quot;allocation failed&quot;</span><span class="op">);</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>root <span class="op">=</span> <span class="op">(</span>node<span class="op">){.</span>data <span class="op">=</span> <span class="dv">1</span><span class="op">,</span> <span class="op">.</span>left <span class="op">=</span> left<span class="op">,</span> <span class="op">.</span>right <span class="op">=</span> right<span class="op">};</span></span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>left <span class="op">=</span> <span class="op">(</span>node<span class="op">){.</span>data <span class="op">=</span> <span class="dv">2</span><span class="op">};</span></span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>right <span class="op">=</span> <span class="op">(</span>node<span class="op">){.</span>data <span class="op">=</span> <span class="dv">3</span><span class="op">};</span></span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>    print_node<span class="op">(</span>root<span class="op">);</span></span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Whereas functions that take in nodes using owned container
+      types won’t work with other types. Because C++ and Rust heavily
+      favor using owned types, its easy to start off with them but when
+      you want to switch to an arena allocator, it can be difficult to
+      refactor all the types to a non owned type. And if you want a
+      function to work with multiple pointer types, you may end up
+      manually duplicating the function for each type.</p>
+      <p>It doesn’t have to be that way though. C++ and Rust are
+      powerful enough to be able to abstract over various smart pointer
+      types as well as raw pointers. Starting with C++, a single
+      template parameter can be used to generically print any type with
+      a printable <code>data</code> field and <code>left</code> and
+      <code>right</code> fields that dereference to the same type as
+      <code>node</code>:</p>
+      <div class="sourceCode" id="cb6"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> Node<span class="op">&gt;</span> <span class="dt">void</span> printNode<span class="op">(</span><span class="at">const</span> Node <span class="op">&amp;</span>node<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>cout <span class="op">&lt;&lt;</span> node<span class="op">.</span>data <span class="op">&lt;&lt;</span> <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>node<span class="op">.</span>left<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    printNode<span class="op">(*</span>node<span class="op">.</span>left<span class="op">);</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>node<span class="op">.</span>right<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    printNode<span class="op">(*</span>node<span class="op">.</span>right<span class="op">);</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <div class="sourceCode" id="cb7"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int32_t</span> data<span class="op">;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Node<span class="op">&gt;</span> left<span class="op">;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="bu">std::</span>unique_ptr<span class="op">&lt;</span>Node<span class="op">&gt;</span> right<span class="op">;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node2 <span class="op">{</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int32_t</span> data<span class="op">;</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  Node2 <span class="op">*</span>left<span class="op">;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>  Node2 <span class="op">*</span>right<span class="op">;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> n1 <span class="op">=</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&gt;(</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>      Node<span class="op">{</span><span class="dv">1</span><span class="op">,</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&gt;(</span>Node<span class="op">{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">}),</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>           <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&gt;(</span>Node<span class="op">{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">})});</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(*</span>n1<span class="op">);</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>  Node2 left<span class="op">{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>  Node2 right<span class="op">{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>  Node2 n2<span class="op">{</span><span class="dv">1</span><span class="op">,</span> <span class="op">&amp;</span>left<span class="op">,</span> <span class="op">&amp;</span>right<span class="op">};</span></span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(</span>n2<span class="op">);</span></span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>To prevent duplicating the <code>Node</code> struct, a template
+      can be used to abstract over the pointer type in the struct
+      definition:</p>
+      <div class="sourceCode" id="cb8"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">using</span> raw_ptr <span class="op">=</span> T <span class="op">*;</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span><span class="op">&gt;</span> <span class="kw">class</span> Ptr <span class="op">=</span> <span class="bu">std::</span>unique_ptr<span class="op">&gt;</span> <span class="kw">struct</span> Node <span class="op">{</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int32_t</span> data<span class="op">;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  Ptr<span class="op">&lt;</span>Node<span class="op">&lt;</span>Ptr<span class="op">&gt;&gt;</span> left<span class="op">;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  Ptr<span class="op">&lt;</span>Node<span class="op">&lt;</span>Ptr<span class="op">&gt;&gt;</span> right<span class="op">;</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> n1 <span class="op">=</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;&gt;&gt;(</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>      Node<span class="op">&lt;&gt;{</span><span class="dv">1</span><span class="op">,</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;&gt;&gt;(</span>Node<span class="op">&lt;&gt;{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">}),</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>             <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;&gt;&gt;(</span>Node<span class="op">&lt;&gt;{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">})});</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(*</span>n1<span class="op">);</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span>raw_ptr<span class="op">&gt;</span> left<span class="op">{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span>raw_ptr<span class="op">&gt;</span> right<span class="op">{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span>raw_ptr<span class="op">&gt;</span> n2<span class="op">{</span><span class="dv">1</span><span class="op">,</span> <span class="op">&amp;</span>left<span class="op">,</span> <span class="op">&amp;</span>right<span class="op">};</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(</span>n2<span class="op">);</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Finally, we don’t have to hardcode the node’s data as a
+      <code>int32_t</code>, that was only to make the C declaration
+      simpler. In C++, it can be generic with another template
+      parameter:</p>
+      <div class="sourceCode" id="cb9"><pre
+      class="sourceCode language-cpp"><code class="sourceCode language-cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">,</span> <span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span><span class="op">&gt;</span> <span class="kw">class</span> Ptr <span class="op">=</span> <span class="bu">std::</span>unique_ptr<span class="op">&gt;</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  T data<span class="op">;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  Ptr<span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">,</span> Ptr<span class="op">&gt;&gt;</span> left<span class="op">;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  Ptr<span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">,</span> Ptr<span class="op">&gt;&gt;</span> right<span class="op">;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> n1 <span class="op">=</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;&gt;(</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;{</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      <span class="dv">1</span><span class="op">,</span> <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;&gt;(</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">}),</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>      <span class="bu">std::</span>make_unique<span class="op">&lt;</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;&gt;(</span>Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">&gt;{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">})});</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(*</span>n1<span class="op">);</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">,</span> raw_ptr<span class="op">&gt;</span> left<span class="op">{</span><span class="dv">2</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">,</span> raw_ptr<span class="op">&gt;</span> right<span class="op">{</span><span class="dv">3</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">,</span> <span class="kw">nullptr</span><span class="op">};</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  Node<span class="op">&lt;</span><span class="dt">int32_t</span><span class="op">,</span> raw_ptr<span class="op">&gt;</span> n2<span class="op">{</span><span class="dv">1</span><span class="op">,</span> <span class="op">&amp;</span>left<span class="op">,</span> <span class="op">&amp;</span>right<span class="op">};</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  printNode<span class="op">(</span>n2<span class="op">);</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>In Rust, abstracting over nodes also possible, but it isn’t as
+      simple as C++. C++ templates essentially copy and paste the
+      specialized type where the template is in the function and check
+      if the result compiles. In Rust, you have to specify the behavior
+      that you want to abstract over using a trait. For our example, we
+      would use trait methods for getting the left, right, and data
+      fields of the type implementing our trait:</p>
+      <div class="sourceCode" id="cb10"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> NodeOps<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> data(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span>T<span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> left(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> right(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>To abstract over pointer-like types, we use
+      <code>impl Deref</code> in the return types of <code>left()</code>
+      and <code>right()</code>. That will work with <code>Box</code>,
+      <code>Rc</code>, <code>bumpalo::boxed::Box</code>,
+      <code>&amp;'a T</code>, etc.</p>
+      <p>Now that we have our node trait, we can write our function:</p>
+      <div class="sourceCode" id="cb11"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> print_node<span class="op">&lt;</span>T<span class="op">:</span> <span class="bu">Debug</span><span class="op">,</span> Node<span class="op">:</span> NodeOps<span class="op">&lt;</span>T<span class="op">&gt;&gt;</span>(node<span class="op">:</span> <span class="op">&amp;</span>Node) <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="pp">println!</span>(<span class="st">&quot;{:?}&quot;</span><span class="op">,</span> node<span class="op">.</span>data())<span class="op">;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(left) <span class="op">=</span> node<span class="op">.</span>left() <span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>        print_node(left<span class="op">.</span>deref())<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(right) <span class="op">=</span> node<span class="op">.</span>right() <span class="op">{</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>        print_node(right<span class="op">.</span>deref())<span class="op">;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>And for each node type, if we implement <code>NodeOps</code> we
+      can use <code>print_node</code> with them.</p>
+      <div class="sourceCode" id="cb12"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    left<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    right<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> NodeOps<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="cf">for</span> Node<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> data(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span>T <span class="op">{</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>data</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> left(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>left</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> right(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>right</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node2<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>    left<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;&amp;</span><span class="ot">&#39;a</span> Node2<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;&gt;,</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>    right<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;&amp;</span><span class="ot">&#39;a</span> Node2<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;&gt;,</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;</span> NodeOps<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="cf">for</span> Node2<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> data(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span>T <span class="op">{</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>data</span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-31"><a href="#cb12-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-32"><a href="#cb12-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> left(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb12-33"><a href="#cb12-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>left</span>
+<span id="cb12-34"><a href="#cb12-34" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-35"><a href="#cb12-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-36"><a href="#cb12-36" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> right(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="kw">impl</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb12-37"><a href="#cb12-37" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>right</span>
+<span id="cb12-38"><a href="#cb12-38" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-39"><a href="#cb12-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>But what if we don’t want to duplicate the node type for each
+      pointer type? In C++ we used
+      <code>template&lt;class&gt; class</code> for template parameters
+      that themselves take in a template parameter. How do we do this in
+      Rust?</p>
+      <p>In other languages like Haskell, higher kinded types are used
+      to abstract over containers of types.</p>
+      <div class="sourceCode" id="cb13"><pre
+      class="sourceCode language-haskell"><code class="sourceCode language-haskell"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Node</span> a f <span class="ot">=</span> <span class="dt">Node</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    {<span class="ot"> nodeData  ::</span> a</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    ,<span class="ot"> nodeLeft  ::</span> <span class="dt">Maybe</span> (f (<span class="dt">Node</span> a f))</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    ,<span class="ot"> nodeRight ::</span> <span class="dt">Maybe</span> (f (<span class="dt">Node</span> a f))</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    }</span></code></pre></div>
+      <p>In this Haskell code <code>f</code> is a type of kind
+      <code>Type -&gt; Type</code> compared to <code>a</code> which has
+      kind <code>Type</code>, so we can pass types that take types as
+      parameters like <code>Maybe</code> and <code>Either ()</code>
+      instead of <code>Int</code> and <code>String</code>.</p>
+      <p>In Rust we can simulate higher kinded types with generic
+      associated types, which are associated types that take in type
+      parameters. Unlike higher kinded types, generic associated types
+      are attached to a trait, so instead of passing in a type directly
+      like <code>Option</code>, you would have to create a new type and
+      then implement the trait for the type with its associated type set
+      to <code>Option&lt;T&gt;</code>. This is more cumbersome, but
+      since Rust doesn’t have proper higher kinded types, this is the
+      best we can do.</p>
+      <p>Our pointer trait that contains <code>T</code> which is the
+      generic associated type that stands for any dereferenceable
+      pointer-like type like <code>Box</code>,
+      <code>bumpalo::boxed::Box</code>, <code>&amp;'a T</code>, etc. is
+      shown below.</p>
+      <div class="sourceCode" id="cb14"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> Ptr <span class="op">{</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;:</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> U<span class="op">&gt;;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Because <code>bumpalo::boxed::Box</code> and
+      <code>&amp;'a T</code> contain a lifetime parameter, the
+      associated type also has to contain a lifetime parameter
+      <code>'a</code> so it can work with these types and still compile.
+      For other types like <code>Box</code>, the lifetime parameter is
+      ignored.</p>
+      <p>The associated type has a bound of <code>Deref</code> and not
+      <code>Deref + DerefMut</code> because <code>&amp;'a</code> doesn’t
+      implement <code>DerefMut</code>. <code>T</code>’s constraints
+      should be the minimum set of constraints, more can be added later
+      in the where clause of functions if needed.</p>
+      <p>Now that we have our pointer trait, we can write our generic
+      <code>Node</code> struct:</p>
+      <div class="sourceCode" id="cb15"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> P<span class="op">:</span> Ptr <span class="op">+</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    left<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    right<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Because <code>Node</code> is generic, we no longer need our
+      <code>NodeOps</code> trait and can write the print function
+      directly on <code>Node</code>:</p>
+      <div class="sourceCode" id="cb16"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">:</span> <span class="bu">Debug</span><span class="op">,</span> P<span class="op">:</span> Ptr<span class="op">&gt;</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> print(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">{</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">println!</span>(<span class="st">&quot;{:?}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>data)<span class="op">;</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> left) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>left <span class="op">{</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>            left<span class="op">.</span>print()<span class="op">;</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> right) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>right <span class="op">{</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>            right<span class="op">.</span>print()<span class="op">;</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>If you want to write a function that mutates a linked left or
+      right node, <code>DerefMut</code> needs to be added as a
+      constraint to <code>Ptr::T</code> in a where clause:</p>
+      <div class="sourceCode" id="cb17"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> P<span class="op">:</span> Ptr<span class="op">&gt;</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">i32</span><span class="op">,</span> P<span class="op">&gt;</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">where</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">Self</span><span class="op">&gt;:</span> <span class="bu">DerefMut</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;,</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> incr(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">{</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>data <span class="op">+=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> <span class="kw">mut</span> left) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>left <span class="op">{</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>            left<span class="op">.</span>incr()<span class="op">;</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> <span class="kw">mut</span> right) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>right <span class="op">{</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>            right<span class="op">.</span>incr()<span class="op">;</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Now in order to use these functions, new types are created to
+      implement <code>Ptr</code> for each type we want to abstract over.
+      Below are the implementations for <code>Box</code> and
+      <code>&amp;'a T</code>:</p>
+      <div class="sourceCode" id="cb18"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> BoxPtr<span class="op">;</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> Ptr <span class="cf">for</span> BoxPtr <span class="op">{</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="dt">Box</span><span class="op">&lt;</span>U<span class="op">&gt;;</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> RefPtr<span class="op">;</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> Ptr <span class="cf">for</span> RefPtr <span class="op">{</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> U<span class="op">;</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> main() <span class="op">{</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> node<span class="op">:</span> Node<span class="op">&lt;</span><span class="dt">i32</span><span class="op">,</span> BoxPtr<span class="op">&gt;</span> <span class="op">=</span> Node <span class="op">{</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>        data<span class="op">:</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>        left<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>        right<span class="op">:</span> <span class="cn">Some</span>(<span class="dt">Box</span><span class="pp">::</span>new(Node <span class="op">{</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>            data<span class="op">:</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>            left<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>            right<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>))<span class="op">,</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>    node<span class="op">.</span>incr()<span class="op">;</span> <span class="co">// incr works with BoxPtr, not RefPtr</span></span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a>    node<span class="op">.</span>print()<span class="op">;</span></span>
+<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> node<span class="op">:</span> Node<span class="op">&lt;</span><span class="dt">i32</span><span class="op">,</span> RefPtr<span class="op">&gt;</span> <span class="op">=</span> Node <span class="op">{</span></span>
+<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>        data<span class="op">:</span> <span class="dv">3</span><span class="op">,</span></span>
+<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>        left<span class="op">:</span> <span class="cn">Some</span>(<span class="op">&amp;</span>Node <span class="op">{</span></span>
+<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>            data<span class="op">:</span> <span class="dv">4</span><span class="op">,</span></span>
+<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>            left<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-28"><a href="#cb18-28" aria-hidden="true" tabindex="-1"></a>            right<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-29"><a href="#cb18-29" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)<span class="op">,</span></span>
+<span id="cb18-30"><a href="#cb18-30" aria-hidden="true" tabindex="-1"></a>        right<span class="op">:</span> <span class="cn">Some</span>(<span class="op">&amp;</span>Node <span class="op">{</span></span>
+<span id="cb18-31"><a href="#cb18-31" aria-hidden="true" tabindex="-1"></a>            data<span class="op">:</span> <span class="dv">5</span><span class="op">,</span></span>
+<span id="cb18-32"><a href="#cb18-32" aria-hidden="true" tabindex="-1"></a>            left<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-33"><a href="#cb18-33" aria-hidden="true" tabindex="-1"></a>            right<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb18-34"><a href="#cb18-34" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)<span class="op">,</span></span>
+<span id="cb18-35"><a href="#cb18-35" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb18-36"><a href="#cb18-36" aria-hidden="true" tabindex="-1"></a>    node<span class="op">.</span>print()<span class="op">;</span></span>
+<span id="cb18-37"><a href="#cb18-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>The <code>Ptr</code> trait works well with trees like abstract
+      syntax trees, but doesn’t work as well with cyclical data
+      structures like graphs. A wrapper around raw pointers like
+      <code>*mut T</code> that implements <code>Deref</code> and
+      <code>DerefMut</code> can work, but that would expose unsafe code
+      and is unidiomatic in Rust.</p>
+      <p>If we want our <code>Ptr</code> trait to also work with
+      cyclical graphs in Rust, we should first list the most common ways
+      that we can safely encode cycles in Rust:</p>
+      <p>One way to work with graphs is to treat links or “pointers” as
+      indices into a <code>Vec</code> of nodes. Then given the index,
+      you can access the data through borrowing the <code>Vec</code>
+      either immutably or mutably. Because indices are essentially
+      integers, they don’t have lifetimes of the referenced data
+      attached to them and can be copied around freely.</p>
+      <p>Another way is to use <code>GhostCell</code> which controls
+      access through a <code>GhostToken</code> type. The
+      <code>GhostCell</code> can be borrowed immutably but still allow
+      mutable access to its data if the passed in
+      <code>GhostToken</code> is borrowed mutably. This allows for
+      multiple immutable borrows of the same <code>GhostCell</code> that
+      can still be mutably borrowed through the token.</p>
+      <p>Finally, reference counted types like
+      <code>Rc&lt;RefCell&lt;T&gt;&gt;</code> can be used for links in
+      graph structures. Borrowing doesn’t require passing in a token,
+      but it is done through a <code>borrow()</code> method which does
+      runtime checking.</p>
+      <p>The <code>GhostToken</code> interface that passes in a token
+      when borrowing can work with all three types. With the index into
+      <code>Vec</code> approach, the <code>Vec</code> is required to
+      borrow using the index, so the <code>Vec</code> can be thought of
+      as the “token” similar to the token passed into the borrow methods
+      of <code>GhostCell</code>. <code>Rc&lt;RefCell&lt;T&gt;&gt;</code>
+      uses a borrow method with no arguments so its token can be the
+      unit type <code>()</code>.</p>
+      <p>So instead of our <code>Ptr</code> trait having a
+      <code>Deref</code> constraint, we need a more general interface
+      for borrowing from the pointer type with a token parameter. The
+      <code>Borrow</code> and <code>BorrowMut</code> traits below are
+      general enough to work with all of the types mentioned above.</p>
+      <div class="sourceCode" id="cb19"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> BorrowSuper <span class="op">{</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;:</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> U<span class="op">&gt;;</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> <span class="bu">Borrow</span><span class="op">:</span> BorrowSuper <span class="op">{</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Token<span class="op">;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Target<span class="op">;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="dt">Self</span><span class="pp">::</span>Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span>Target<span class="op">&gt;;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> BorrowMutSuper <span class="op">{</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;:</span> <span class="bu">Deref</span><span class="op">&lt;</span>Target <span class="op">=</span> U<span class="op">&gt;</span> <span class="op">+</span> <span class="bu">DerefMut</span><span class="op">&lt;</span>Target <span class="op">=</span> U<span class="op">&gt;;</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> <span class="bu">BorrowMut</span><span class="op">:</span> BorrowMutSuper <span class="op">+</span> <span class="bu">Borrow</span> <span class="op">{</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_mut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="dt">Self</span><span class="pp">::</span>RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span>Target<span class="op">&gt;;</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a><span class="kw">trait</span> Ptr <span class="op">{</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;:</span> <span class="bu">Borrow</span><span class="op">&lt;</span>Target <span class="op">=</span> U<span class="op">&gt;;</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>The main differences from the previous pointer trait is that
+      <code>T</code> needs an additional lifetime for the
+      <code>GhostCell</code>’s brand lifetime, <code>Borrow</code> has
+      an associated type for the type of the token to be passed in, and
+      <code>Borrow</code> also needs to abstract over returned reference
+      types because <code>RefCell</code>’s borrow() doesn’t return a
+      borrow but a <code>std::cell::Ref</code> type.</p>
+      <p><code>Borrow</code> only splits off its <code>Ref</code> into
+      <code>BorrowSuper</code> to work around issue <a
+      href="https://github.com/rust-lang/rust/issues/87479">#87479</a>
+      which would forces a <code>Self: 'a</code> constraint. If this
+      issue didn’t exist we could put <code>Ref</code> directly inside
+      <code>Borrow</code> without any problems.</p>
+      <p>Now that we have a new pointer trait, the previous tree types
+      and functions can be modified to work with it:</p>
+      <div class="sourceCode" id="cb20"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> P<span class="op">:</span> Ptr <span class="op">+</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    left<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    right<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">:</span> <span class="bu">Debug</span><span class="op">,</span> P<span class="op">:</span> Ptr<span class="op">&gt;</span> Node<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> print(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> <span class="dt">Self</span><span class="op">&gt;</span> <span class="kw">as</span> <span class="bu">Borrow</span><span class="op">&gt;</span><span class="pp">::</span>Token) <span class="op">{</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>        <span class="pp">println!</span>(<span class="st">&quot;{:?}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>data)<span class="op">;</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> left) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>left <span class="op">{</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>            left<span class="op">.</span>get(token)<span class="op">.</span>print(token)<span class="op">;</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> right) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>right <span class="op">{</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>            right<span class="op">.</span>get(token)<span class="op">.</span>print(token)<span class="op">;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>But now cyclical types like graphs can also work:</p>
+      <div class="sourceCode" id="cb21"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> GraphNode<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> P<span class="op">:</span> Ptr <span class="op">+</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    edges<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> GraphNode<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">:</span> <span class="bu">Copy</span> <span class="op">+</span> <span class="bu">AddAssign</span><span class="op">&lt;</span>T<span class="op">&gt;,</span> P<span class="op">:</span> Ptr<span class="op">&gt;</span> GraphNode<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> T<span class="op">,</span> P<span class="op">&gt;</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="kw">where</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> <span class="dt">Self</span><span class="op">&gt;:</span> <span class="bu">BorrowMut</span><span class="op">&lt;</span>Target <span class="op">=</span> <span class="dt">Self</span><span class="op">&gt;</span> <span class="op">+</span> <span class="bu">Clone</span><span class="op">,</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> incr(this<span class="op">:</span> <span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> <span class="dt">Self</span><span class="op">&gt;,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="kw">mut</span> <span class="op">&lt;</span><span class="pp">P::</span>T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">,</span> <span class="dt">Self</span><span class="op">&gt;</span> <span class="kw">as</span> <span class="bu">Borrow</span><span class="op">&gt;</span><span class="pp">::</span>Token) <span class="op">{</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> data <span class="op">=</span> this<span class="op">.</span>get(token)<span class="op">.</span>data<span class="op">;</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> edges <span class="op">=</span> this<span class="op">.</span>get(token)<span class="op">.</span>edges<span class="op">.</span>clone()<span class="op">;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> edge <span class="kw">in</span> edges<span class="op">.</span>clone() <span class="op">{</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>            edge<span class="op">.</span>get_mut(token)<span class="op">.</span>data <span class="op">+=</span> data<span class="op">;</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> edge <span class="kw">in</span> edges <span class="op">{</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>            <span class="dt">Self</span><span class="pp">::</span>incr(edge<span class="op">,</span> token)<span class="op">;</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>The <code>incr</code> method runs forever with cyclical edges
+      until it overflows the stack. A way to fix that would be to have a
+      hashmap track the visited nodes, but the code right now is
+      sufficient for showing that the Rust compiler will allow working
+      with cyclical edges without errors.</p>
+      <p>Note that <code>clone</code> is called twice, which is
+      something that would not be necessary if working directly with
+      integer indices. That is because <code>P::T</code> is
+      <code>Clone</code> not <code>Copy</code>. In Rust,
+      <code>Copy</code> doesn’t just mean that you can copy a type like
+      in C++, it also means that a type doesn’t implement
+      <code>Drop</code>. Not having <code>Drop</code>, which is similar
+      to destructors in C++, would simplify the lifetimes of
+      <code>edge</code> in the function, but we can’t use it because
+      some of the pointer types don’t implement <code>Copy</code>, and a
+      custom implementation cannot be provided. So we have to call
+      <code>clone</code> twice in order for it to compile.</p>
+      <p>Finally we need to implement <code>Borrow</code> and
+      <code>Ptr</code> for our types. Starting off with
+      <code>GhostCell</code> which is the simplest of the three to
+      implement. Borrowing from the token calls the related
+      <code>borrow()</code> function from the
+      <code>GhostCell</code>:</p>
+      <div class="sourceCode" id="cb22"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowSuper <span class="cf">for</span> <span class="op">&amp;</span>GhostCell<span class="op">&lt;</span><span class="ot">&#39;_</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> U<span class="op">;</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;brand</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="bu">Borrow</span> <span class="cf">for</span> <span class="op">&amp;</span>GhostCell<span class="op">&lt;</span><span class="ot">&#39;brand</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Token <span class="op">=</span> GhostToken<span class="op">&lt;</span><span class="ot">&#39;brand</span><span class="op">&gt;;</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Target <span class="op">=</span> T<span class="op">;</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Target <span class="op">{</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>borrow(token)</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowMutSuper <span class="cf">for</span> <span class="op">&amp;</span>GhostCell<span class="op">&lt;</span><span class="ot">&#39;_</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> U<span class="op">;</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span><span class="ot">&#39;brand</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="bu">BorrowMut</span> <span class="cf">for</span> <span class="op">&amp;</span>GhostCell<span class="op">&lt;</span><span class="ot">&#39;brand</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_mut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Target <span class="op">{</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>borrow_mut(token)</span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> GhostCellPtr<span class="op">;</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> Ptr <span class="cf">for</span> GhostCellPtr <span class="op">{</span></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> GhostCell<span class="op">&lt;</span><span class="ot">&#39;b</span><span class="op">,</span> U<span class="op">&gt;;</span></span>
+<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>For the index into Vec approach, the <code>slotmap</code> crate
+      is used for convenience. The key type contains the index into the
+      graph. Since we work with the keys as if they are pointers to
+      nodes in the graph, the key type must be parametrized by the node
+      type.</p>
+      <div class="sourceCode" id="cb23"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="pp">new_key_type!</span> <span class="op">{</span> <span class="kw">struct</span> GraphId<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> GraphKey<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    id<span class="op">:</span> GraphId<span class="op">,</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    _phantom<span class="op">:</span> PhantomData<span class="op">&lt;</span>T<span class="op">&gt;,</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> GraphMap<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">=</span> SlotMap<span class="op">&lt;</span>GraphId<span class="op">,</span> T<span class="op">&gt;;</span></span></code></pre></div>
+      <p>Now we can implement <code>Borrow</code> and
+      <code>BorrowMut</code> for <code>GraphKey</code> using the slotmap
+      as the token. Borrowing from the index borrows from the token
+      (<code>GraphMap</code>) using the key (<code>GraphId</code>),
+      which is the opposite from <code>GhostCell</code>, which borrows
+      from the key (<code>GhostCell</code>) using the token
+      (<code>GhostToken</code>):</p>
+      <div class="sourceCode" id="cb24"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowSuper <span class="cf">for</span> GraphKey<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> U<span class="op">;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">Borrow</span> <span class="cf">for</span> GraphKey<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Token <span class="op">=</span> GraphMap<span class="op">&lt;</span>T<span class="op">&gt;;</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Target <span class="op">=</span> T<span class="op">;</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Target <span class="op">{</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>        token<span class="op">.</span>get(<span class="kw">self</span><span class="op">.</span>id)<span class="op">.</span>unwrap()</span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowMutSuper <span class="cf">for</span> GraphKey<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> U<span class="op">;</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">BorrowMut</span> <span class="cf">for</span> GraphKey<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_mut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Target <span class="op">{</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>        token<span class="op">.</span>get_mut(<span class="kw">self</span><span class="op">.</span>id)<span class="op">.</span>unwrap()</span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> GraphKeyPtr<span class="op">;</span></span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> Ptr <span class="cf">for</span> GraphKeyPtr <span class="op">{</span></span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> GraphKey<span class="op">&lt;</span>U<span class="op">&gt;;</span></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Finally, in order to implement <code>Borrow</code> and
+      <code>BorrowMut</code> for
+      <code>Rc&lt;RefCell&lt;T&gt;&gt;</code>, we have to have
+      <code>std::cell::Ref</code> implement <code>Clone</code>. The type
+      already allows for cloning but the trait isn’t implemented because
+      it copies the reference, not the data inside which can be
+      confusing. We implement <code>Clone</code> by creating a newtype
+      <code>CellRef</code> that wraps <code>std::cell::Ref</code>:</p>
+      <div class="sourceCode" id="cb25"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> CellRef<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;</span>(<span class="pp">std::cell::</span>Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> T<span class="op">&gt;</span>)<span class="op">;</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">Deref</span> <span class="cf">for</span> CellRef<span class="op">&lt;</span><span class="ot">&#39;_</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Target <span class="op">=</span> T<span class="op">;</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> deref(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Self</span><span class="pp">::</span>Target <span class="op">{</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span><span class="dv">0</span><span class="op">.</span>deref()</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">Clone</span> <span class="cf">for</span> CellRef<span class="op">&lt;</span><span class="ot">&#39;_</span><span class="op">,</span> T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> clone(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Self</span> <span class="op">{</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span>(<span class="pp">std::cell::Ref::</span>clone(<span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span><span class="dv">0</span>))</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>Now we can implement <code>Borrow</code> and
+      <code>BorrowMut</code> that call the <code>RefCell</code>’s
+      <code>borrow()</code> and <code>borrow_mut()</code> methods:</p>
+      <div class="sourceCode" id="cb26"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowSuper <span class="cf">for</span> Rc<span class="op">&lt;</span>RefCell<span class="op">&lt;</span>T<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> CellRef<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">&gt;;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">Borrow</span> <span class="cf">for</span> Rc<span class="op">&lt;</span>RefCell<span class="op">&lt;</span>T<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Token <span class="op">=</span> ()<span class="op">;</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> Target <span class="op">=</span> T<span class="op">;</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> _token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="dt">Self</span><span class="pp">::</span>Ref<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span>Target<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>        CellRef(<span class="kw">self</span><span class="op">.</span>borrow())</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> BorrowMutSuper <span class="cf">for</span> Rc<span class="op">&lt;</span>RefCell<span class="op">&lt;</span>T<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> <span class="pp">std::cell::</span>RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">&gt;;</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span><span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="bu">BorrowMut</span> <span class="cf">for</span> Rc<span class="op">&lt;</span>RefCell<span class="op">&lt;</span>T<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_mut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">&gt;</span>(<span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">self</span><span class="op">,</span> _token<span class="op">:</span> <span class="op">&amp;</span><span class="ot">&#39;a</span> <span class="kw">mut</span> <span class="dt">Self</span><span class="pp">::</span>Token) <span class="op">-&gt;</span> <span class="dt">Self</span><span class="pp">::</span>RefMut<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span>Target<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>borrow_mut()</span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> RcRefCellPtr<span class="op">;</span></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> Ptr <span class="cf">for</span> RcRefCellPtr <span class="op">{</span></span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">type</span> T<span class="op">&lt;</span><span class="ot">&#39;a</span><span class="op">,</span> <span class="ot">&#39;b</span><span class="op">:</span> <span class="ot">&#39;a</span><span class="op">,</span> U<span class="op">:</span> <span class="ot">&#39;a</span><span class="op">&gt;</span> <span class="op">=</span> Rc<span class="op">&lt;</span>RefCell<span class="op">&lt;</span>U<span class="op">&gt;&gt;;</span></span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>With these implementations, we can get the <code>print()</code>
+      and <code>incr()</code> methods to compile with ghostcells,
+      slotmaps, and reference counted pointers. The code for testing
+      each implementation is shown <a
+      href="https://gist.github.com/DarinM223/cf720814cec736258603f618a13382ef#file-generic_ptr2-rs-L234-L329">here</a>.</p>
+      <p>It may seem like the <code>Ptr</code>, <code>Borrow</code>, and
+      <code>BorrowMut</code> traits are capable of working with every
+      possible way to encode mutable cyclical data. However, there is
+      another way to work with cycles in Rust. The <code>Cell</code>
+      type allows for the data inside to be mutated through an immutable
+      reference as long as the inner data implements <code>Copy</code>.
+      Here are some examples of defining our previously used tree and
+      graph node types using <code>Cell</code>:</p>
+      <div class="sourceCode" id="cb27"><pre
+      class="sourceCode language-rust"><code class="sourceCode language-rust"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Node<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    left<span class="op">:</span> Cell<span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;&gt;,</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    right<span class="op">:</span> Cell<span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>Node<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;&gt;,</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> GraphNode<span class="op">&lt;</span>T<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>    data<span class="op">:</span> T<span class="op">,</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>    edges<span class="op">:</span> Cell<span class="op">&lt;</span>[<span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Box</span><span class="op">&lt;</span>GraphNode<span class="op">&lt;</span>T<span class="op">&gt;&gt;&gt;;</span> <span class="dv">10</span>]<span class="op">&gt;,</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+      <p>The main thing to notice about these definitions is that unlike
+      <code>GhostCell</code> the <code>Cell</code> is wrapping the whole
+      type including the <code>Option</code>. If it isn’t done that way
+      you wouldn’t be able to set a node to <code>None</code> from an
+      immutable reference and wouldn’t be able to encode cycles. The
+      problem with this is that the structure of this link type is
+      fundamentally different from the other pointer-like types. In
+      order for <code>Cell</code> to work with our existing
+      <code>Ptr</code> trait, every type that contains <code>P::T</code>
+      would have to be moved so that <code>P::T</code> contains it
+      instead. So for example, an
+      <code>Option&lt;P::T&lt;'a, Node&lt;'a, T, P&gt;&gt;&gt;</code>
+      would have to be translated into
+      <code>P::T&lt;'a, Option&lt;Node&lt;'a, T, P&gt;&gt;&gt;</code>,
+      <code>Option&lt;Option&lt;P::T&lt;'a, Node&lt;'a, T, P&gt;&gt;&gt;&gt;</code>
+      would have to become
+      <code>P::T&lt;'a, Option&lt;Option&lt;Node&lt;'a, T, P&gt;&gt;&gt;&gt;</code>,
+      etc. I don’t believe it is possible to do this conversion
+      automatically through the trait system, and it probably wouldn’t
+      make sense to do so. So although the <code>Ptr</code> trait can
+      work with many common types used for cyclical structures, it
+      doesn’t work with <code>Cell</code>.</p>
+      <h2 id="conclusion">Conclusion</h2>
+      <p>Is it worth it to go through the effort to abstract out
+      pointer-like types in this manner? For things like abstract syntax
+      trees, I think so. Using tracked separate allocations for the
+      recursive children of a tree node with something like Rust’s
+      <code>Box</code> is often the easiest way to get started, but it’s
+      common to run into issues like the destructor overflowing the
+      stack for large ASTs or time being spent dropping each node when
+      the whole AST can be dropped at once. I inevitably end up moving
+      to an arena allocation strategy for AST nodes, and a little time
+      spent upfront abstracting the pointer children types can save a
+      lot of time with this refactor. For graphs, I think this technique
+      is less useful. It’s pretty uncommon to change the childen pointer
+      types for graph nodes and even the abstracted type won’t support
+      <code>Cell</code> which is common for cyclical types.</p>
+      <p>Although this technique seems pretty useful to me for certain
+      use cases, it would be pretty difficult to use this in a
+      production setting because it looks complicated, and you generally
+      only get benefits if you opt into it from the very beginning. Most
+      engineers have a YAGNI (you aren’t going to need it) mindset which
+      would make it very difficult for anyone to sign on to this idea
+      from the very beginning of a project. Because of this, I actually
+      think that only having a single pointer type like C is the most
+      practical way to write code that is reusable across different
+      allocation strategies, because most code that works with pointers
+      and doesn’t call specific memory management functions like
+      <code>free</code> can be reused out of the box. With C++ and Rust,
+      people would most likely hardcode their project to a specific
+      memory management type and then use AI to rewrite the project if
+      their assumptions change. Still, I think its interesting that
+      these languages have powerful enough type systems to allow this
+      kind of abstraction.</p>
+    </div>
+  </div>
+  <script src="static/js/prism.js"></script>
+</body>
+
+
+</html>

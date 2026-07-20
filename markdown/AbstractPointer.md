@@ -480,7 +480,7 @@ trait Ptr {
 The main differences from the previous pointer trait is that `T` needs an additional lifetime for the `GhostCell`'s brand lifetime, `Borrow` has an associated type for the type of the token to be passed in, and `Borrow` also needs
 to abstract over returned reference types because `RefCell`'s borrow() doesn't return a borrow but a `std::cell::Ref` type.
 
-`Borrow` only splits off its `Ref` into `BorrowSuper` to work around issue [#87479](https://github.com/rust-lang/rust/issues/87479) which would forces a `Self: 'a` constraint. If this issue didn't exist we could put `Ref` directly inside `Borrow` without any problems.
+`Borrow` only splits off its `Ref` into `BorrowSuper` to work around issue [#87479](https://github.com/rust-lang/rust/issues/87479) which forces a `Self: 'a` constraint. If this issue didn't exist we could put `Ref` directly inside `Borrow` without any problems.
 
 Now that we have a new pointer trait, the previous tree types and functions can be modified to work with it:
 

@@ -488,7 +488,7 @@
       <p><code>Borrow</code> only splits off its <code>Ref</code> into
       <code>BorrowSuper</code> to work around issue <a
       href="https://github.com/rust-lang/rust/issues/87479">#87479</a>
-      which would forces a <code>Self: 'a</code> constraint. If this
+      which forces a <code>Self: 'a</code> constraint. If this
       issue didn’t exist we could put <code>Ref</code> directly inside
       <code>Borrow</code> without any problems.</p>
       <p>Now that we have a new pointer trait, the previous tree types

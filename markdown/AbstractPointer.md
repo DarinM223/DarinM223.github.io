@@ -671,21 +671,42 @@ reference as long as the inner data implements `Copy`. Here are
 some examples of defining our previously used tree and graph node types using `Cell`:
 
 ```rust
-struct Node<T> {
-    data: T,
-    left: Cell<Option<Box<Node<T>>>>,
-    right: Cell<Option<Box<Node<T>>>>,
+struct Node<'a, T: Copy> {
+    data: Cell<T>,
+    left: Cell<Option<&'a Node<'a, T>>>,
+    right: Cell<Option<&'a Node<'a, T>>>,
 }
 
-struct GraphNode<T> {
-    data: T,
-    edges: Cell<[Option<Box<GraphNode<T>>>; 10]>,
+struct GraphNode<'a, T: Copy> {
+    data: Cell<T>,
+    edges: Cell<StackVec<&'a GraphNode<'a, T>, 100>>,
+}
+
+impl<'a, T: Copy + Add<Output = T>> GraphNode<'a, T> {
+    fn incr(&self) {
+        let data = self.data.get();
+        let edges = self.edges.get();
+        for i in 0..edges.len() {
+            edges.get(i).data.update(|v| v + data);
+        }
+        for i in 0..edges.len() {
+            edges.get(i).incr();
+        }
+    }
 }
 ```
 
-The main thing to notice about these definitions is that unlike `GhostCell` the `Cell` is wrapping the
-whole type including the `Option`. If it isn't done that way you wouldn't be able to set a node to `None` from an immutable reference and
-wouldn't be able to encode cycles. The problem with this is that the structure of this link type is fundamentally different from the other pointer-like types. In order for `Cell` to work with our existing `Ptr` trait, every type that contains `P::T` would have to be moved so that `P::T` contains it instead. So for example, an `Option<P::T<'a, Node<'a, T, P>>>` would have to be translated into `P::T<'a, Option<Node<'a, T, P>>>`, `Option<Option<P::T<'a, Node<'a, T, P>>>>` would have to become `P::T<'a, Option<Option<Node<'a, T, P>>>>`, etc. I don't believe it is possible to do this conversion automatically through the trait system, and it probably wouldn't make sense to do so. So although the `Ptr` trait can work with many common types used for cyclical structures, it doesn't work with `Cell`.
+Some things to notice about these examples:
+
+* Unlike `GhostCell` the `Cell` is wrapping the
+whole type including the `Option`.  If it isn't done that way you wouldn't be able to set a node to `None` from an immutable reference and
+wouldn't be able to encode cycles.
+* `Cell` has to wrap the other fields in a struct or else those fields won't be able to be modified, unlike the previous pointer-like types where we could borrow the entire struct as mutable.
+* Code that uses these definitions have to use `Cell`'s methods for getting and setting data instead of borrows and mutable borrows.
+We cannot overload the assignment operator in Rust so we cannot
+make the `Cell` based code syntactically similar to the functions using our `Ptr` trait.
+
+The structure of mutable cyclical types with `Cell` is fundamentally different from the other pointer-like types. So although the `Ptr` trait can work with many common types used for cyclical structures, it doesn't work with `Cell`.
 
 Conclusion
 ----------

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Register permutation visualizer</title>
+<style>
+  body {
+    font: 15px/1.45 system-ui, sans-serif;
+    max-width: 1000px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    color: #20242a;
+  }
+  input { padding: .45rem; width: min(100%, 28rem); }
+  button { padding: .45rem .8rem; margin: .4rem .25rem .4rem 0; cursor: pointer; }
+  .note, #stepCounter { color: #555; }
+  #error { color: #b00020; }
+  #graphic {
+    overflow-x: auto;
+    border: 1px solid #d6d9de;
+    border-radius: 8px;
+    background: #fbfcfe;
+    padding: .5rem;
+  }
+  svg { display: block; max-width: 100%; }
+  .register-label { font-size: 13px; font-weight: 650; fill: #29313d; }
+  .value-label { font-size: 16px; font-weight: 700; fill: #20242a; }
+  .register-segment { stroke: #747d8a; stroke-width: 1.5; }
+  .occupied { fill: #e7f0ff; }
+  .empty { fill: #f0f1f3; }
+  .copy-arrow {
+    fill: none;
+    stroke: #187c67;
+    stroke-width: 3;
+    stroke-dasharray: 8 7;
+    animation: flow 0.45s linear infinite;
+  }
+  .swap-arrow {
+    fill: none;
+    stroke: #b56519;
+    stroke-width: 3;
+    stroke-dasharray: 8 7;
+    animation: flow 0.45s linear infinite;
+  }
+  .flow-token circle { fill: #fff; stroke: #187c67; stroke-width: 2; }
+  .flow-token.swap circle { stroke: #b56519; }
+  .flow-token text {
+    text-anchor: middle;
+    dominant-baseline: central;
+    font-size: 12px;
+    font-weight: 700;
+    fill: #20242a;
+  }
+  @keyframes flow { to { stroke-dashoffset: -15; } }
+  #copies { padding-left: 1.5rem; }
+  #copies li { margin: .35rem 0; font-family: ui-monospace, monospace; }
+  #copies li.latest { color: #187c67; font-weight: 700; }
+</style>
+
+<h1>Register permutation visualizer</h1>
+<p>
+  The permutation index is the destination and its value is the source:
+  <code>[1, 2, 0]</code> means register 0 gets register 1, register 1 gets
+  register 2, and register 2 gets register 0.
+</p>
+<p class="note">
+  Register names are assigned in order: rax, rbx, rcx, rdx, rsi, rdi, then r8, r9, …
+  Live-register input uses indices.
+</p>
+
+<label>Permutation:
+  <input id="permutationInput" value="1, 2, 0, 3">
+</label>
+<br>
+<label>Initially occupied register indices:
+  <input id="liveInput" value="0, 2">
+</label>
+<br>
+<label><input type="checkbox" id="deadCheckbox"> Permute dead registers too</label>
+<div id="error"></div>
+
+<div>
+  <button id="resetButton">Run / reset</button>
+  <button id="prevButton">◀ Previous</button>
+  <button id="nextButton">Next ▶</button>
+  <button id="playButton">Play</button>
+  <span id="stepCounter"></span>
+</div>
+
+<h2 id="stepTitle">Ready</h2>
+<div id="graphic"></div>
+
+<h2>Parallel copies</h2>
+<ol id="copies"></ol>
+
+<script>
+"use strict";
+
+const REG_NAMES = [
+  "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+  "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+];
+
+function registerName(index) {
+  return REG_NAMES[index] ?? `reg${index}`;
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+/*
+ * JavaScript translation of permute_values.
+ * Registers are strings, pcopy instructions are objects, and head is an array.
+ * The onStep callback is used by the visualizer to capture frames.
+ */
+function permuteValues(
+  state,
+  permutation,
+  head = [],
+  { permuteDeadRegs = false, onStep = () => {} } = {}
+) {
+  const numRegs = state.regs.length;
+  const numUsed = Array(numRegs).fill(0);
+  const srcs = [];
+  const dests = [];
+
+  const record = (message, moves = []) => onStep({
+    message,
+    moves,
+    regs: state.regs.map((name, i) => ({
+      name,
+      occupied: state.occupied[i],
+      variable: state.reg_current_var[i]?.name ?? null
+    })),
+    instructions: head.map(instruction => ({
+      ...instruction,
+      srcs: instruction.srcs.slice(),
+      dests: instruction.dests.slice()
+    }))
+  });
+
+  record("Starting state");
+
+  // Count source uses; ignore dead sources unless requested otherwise.
+  for (let r = 0; r < numRegs; r++) {
+    const oldReg = permutation[r];
+    if (permuteDeadRegs || state.occupied[oldReg]) {
+      numUsed[oldReg]++;
+    } else {
+      permutation[r] = r;
+    }
+  }
+
+  let r = 0;
+
+  // Build the initial parallel copy for moves that are safe to perform now.
+  while (r < numRegs) {
+    const oldReg = permutation[r];
+
+    if (oldReg === r || numUsed[r] > 0) {
+      r++;
+    } else {
+      const movingValue = state.reg_current_var[oldReg]?.name ?? "";
+      if (state.reg_current_var[oldReg]) {
+        state.reg_current_var[oldReg].reg = state.regs[r];
+      }
+
+      state.occupied[r] = true;
+      state.reg_current_var[r] = state.reg_current_var[oldReg];
+      state.reg_current_pref[r] = state.reg_current_pref[oldReg];
+
+      srcs.push(state.regs[oldReg]);
+      dests.push(state.regs[r]);
+      permutation[r] = r;
+      numUsed[oldReg]--;
+
+      if (numUsed[oldReg] === 0) {
+        state.occupied[oldReg] = false;
+        state.reg_current_var[oldReg] = null;
+        state.reg_current_pref[oldReg] = 0;
+      }
+
+      record(`Copy ${state.regs[r]} ← ${state.regs[oldReg]}`, [{
+        from: oldReg,
+        to: r,
+        label: movingValue,
+        kind: "copy"
+      }]);
+
+      if (oldReg < r && numUsed[oldReg] === 0) {
+        r = oldReg;
+      } else {
+        r++;
+      }
+    }
+  }
+
+  if (dests.length > 0) {
+    head.push({ kind: "pcopy", dests: dests.slice(), srcs: srcs.slice() });
+    record("Append initial parallel copy");
+  }
+
+  // Resolve remaining cycles with pairwise swaps.
+  r = 0;
+  while (r < numRegs) {
+    const oldReg = permutation[r];
+
+    if (oldReg === r) {
+      r++;
+    } else {
+      const rPrime = permutation[oldReg];
+      const valueAtOld = state.reg_current_var[oldReg]?.name ?? "";
+      const valueAtPrime = state.reg_current_var[rPrime]?.name ?? "";
+
+      swapRegs(state, oldReg, rPrime);
+
+      head.push({
+        kind: "pcopy",
+        dests: [state.regs[rPrime], state.regs[oldReg]],
+        srcs: [state.regs[oldReg], state.regs[rPrime]]
+      });
+
+      permutation[oldReg] = oldReg;
+      permutation[r] = rPrime;
+
+      record(`Swap ${state.regs[oldReg]} and ${state.regs[rPrime]}`, [
+        { from: oldReg, to: rPrime, label: valueAtOld, kind: "swap" },
+        { from: rPrime, to: oldReg, label: valueAtPrime, kind: "swap" }
+      ]);
+    }
+  }
+
+  return head;
+}
+
+/* Demonstration equivalent of the project-specific swap_regs helper. */
+function swapRegs(state, a, b) {
+  [state.occupied[a], state.occupied[b]] =
+    [state.occupied[b], state.occupied[a]];
+  [state.reg_current_var[a], state.reg_current_var[b]] =
+    [state.reg_current_var[b], state.reg_current_var[a]];
+  [state.reg_current_pref[a], state.reg_current_pref[b]] =
+    [state.reg_current_pref[b], state.reg_current_pref[a]];
+
+  if (state.reg_current_var[a]) state.reg_current_var[a].reg = state.regs[a];
+  if (state.reg_current_var[b]) state.reg_current_var[b].reg = state.regs[b];
+}
+
+let frames = [];
+let currentFrame = 0;
+let playTimer = null;
+
+function parseIndices(text) {
+  if (!text.trim()) return [];
+  return text.split(",").map(part => {
+    const value = Number(part.trim());
+    if (!Number.isInteger(value)) throw new Error("Use comma-separated integers.");
+    return value;
+  });
+}
+
+function run() {
+  stopPlay();
+  document.getElementById("error").textContent = "";
+
+  try {
+    const enteredPermutation = parseIndices(
+      document.getElementById("permutationInput").value
+    );
+    const liveIndices = parseIndices(document.getElementById("liveInput").value);
+    const numRegs = 16;
+
+    if (enteredPermutation.length === 0) {
+      throw new Error("Enter at least one permutation value.");
+    }
+    if (enteredPermutation.length > numRegs) {
+      throw new Error(`Enter at most ${numRegs} destination values.`);
+    }
+    if (enteredPermutation.some(value => value < 0 || value >= numRegs)) {
+      throw new Error(`Each source index must be between 0 and ${numRegs - 1}.`);
+    }
+    if (liveIndices.some(value => value < 0 || value >= numRegs)) {
+      throw new Error(`Live indices must be between 0 and ${numRegs - 1}.`);
+    }
+
+    // Unspecified destinations map to themselves. Sources may be repeated.
+    const permutation = Array.from(
+      { length: numRegs },
+      (_, i) => enteredPermutation[i] ?? i
+    );
+
+    const live = new Set(liveIndices);
+    const state = {
+      regs: Array.from({ length: numRegs }, (_, i) => registerName(i)),
+      occupied: Array.from({ length: numRegs }, (_, i) => live.has(i)),
+      reg_current_var: Array.from({ length: numRegs }, (_, i) =>
+        live.has(i) ? { name: `v${i}`, reg: registerName(i) } : null
+      ),
+      reg_current_pref: Array(numRegs).fill(0)
+    };
+
+    frames = [];
+    permuteValues(state, permutation, [], {
+      permuteDeadRegs: document.getElementById("deadCheckbox").checked,
+      onStep: frame => frames.push(frame)
+    });
+
+    currentFrame = 0;
+    showFrame();
+  } catch (error) {
+    document.getElementById("error").textContent = error.message;
+  }
+}
+
+function renderGraphic(frame) {
+  const n = frame.regs.length;
+  const segmentWidth = 118;
+  const segmentHeight = 66;
+  const startX = 24;
+  const registerY = 172;
+  const width = startX * 2 + n * segmentWidth;
+  const height = 300;
+
+  const segments = frame.regs.map((reg, i) => {
+    const x = startX + i * segmentWidth;
+    const fillClass = reg.occupied ? "occupied" : "empty";
+    return `
+      <g>
+        <rect class="register-segment ${fillClass}"
+          x="${x}" y="${registerY}" width="${segmentWidth}" height="${segmentHeight}" />
+        <text class="register-label" x="${x + segmentWidth / 2}" y="${registerY + 22}"
+          text-anchor="middle">${escapeHtml(reg.name)}</text>
+        <text class="value-label" x="${x + segmentWidth / 2}" y="${registerY + 48}"
+          text-anchor="middle">${escapeHtml(reg.variable ?? "—")}</text>
+      </g>`;
+  }).join("");
+
+  const arrows = frame.moves.map((move, i) => {
+    const x1 = startX + move.from * segmentWidth + segmentWidth / 2;
+    const x2 = startX + move.to * segmentWidth + segmentWidth / 2;
+    const lane = move.kind === "swap" ? (i === 0 ? 0 : 1) : 0;
+    const controlY = 92 - lane * 34;
+    const path = `M ${x1} ${registerY} Q ${(x1 + x2) / 2} ${controlY} ${x2} ${registerY}`;
+    const arrowClass = move.kind === "swap" ? "swap-arrow" : "copy-arrow";
+    const tokenClass = move.kind === "swap" ? "flow-token swap" : "flow-token";
+
+    return `
+      <path d="${path}" class="${arrowClass}" marker-end="url(#arrowhead)" />
+      ${move.label ? `
+        <g class="${tokenClass}">
+          <circle r="16"></circle>
+          <text y="1">${escapeHtml(move.label)}</text>
+          <animateMotion dur="0.8s" repeatCount="1" fill="freeze" path="${path}" />
+        </g>` : ""}`;
+  }).join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"
+      role="img" aria-label="Register segments and animated moves">
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="8"
+          refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L0,8 L9,4 z" fill="#187c67"></path>
+        </marker>
+      </defs>
+      ${arrows}
+      ${segments}
+    </svg>`;
+}
+
+function showFrame() {
+  if (!frames.length) return;
+
+  const frame = frames[currentFrame];
+  document.getElementById("stepTitle").textContent = frame.message;
+  document.getElementById("stepCounter").textContent =
+    `Step ${currentFrame + 1} of ${frames.length}`;
+  document.getElementById("graphic").innerHTML = renderGraphic(frame);
+
+  const copies = document.getElementById("copies");
+  copies.innerHTML = frame.instructions.map((instruction, index) => {
+    const latest = index === frame.instructions.length - 1 ? "latest" : "";
+    return `<li class="${latest}">pcopy dests=[${instruction.dests.join(", ")}] srcs=[${instruction.srcs.join(", ")}]</li>`;
+  }).join("");
+}
+
+function stopPlay() {
+  if (playTimer !== null) {
+    clearInterval(playTimer);
+    playTimer = null;
+    document.getElementById("playButton").textContent = "Play";
+  }
+}
+
+document.getElementById("resetButton").addEventListener("click", run);
+
+document.getElementById("nextButton").addEventListener("click", () => {
+  stopPlay();
+  if (currentFrame < frames.length - 1) currentFrame++;
+  showFrame();
+});
+
+document.getElementById("prevButton").addEventListener("click", () => {
+  stopPlay();
+  if (currentFrame > 0) currentFrame--;
+  showFrame();
+});
+
+document.getElementById("playButton").addEventListener("click", () => {
+  if (playTimer !== null) {
+    stopPlay();
+    return;
+  }
+
+  document.getElementById("playButton").textContent = "Pause";
+  playTimer = setInterval(() => {
+    if (currentFrame >= frames.length - 1) {
+      stopPlay();
+      return;
+    }
+    currentFrame++;
+    showFrame();
+  }, 900);
+});
+
+run();
+</script>
+</html>

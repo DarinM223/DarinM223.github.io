@@ -1,10 +1,17 @@
 Gotchas when implementing SSA register allocation:
---------------------------------------------------
+==================================================
 
 [SSA register allocation](https://compilers.cs.uni-saarland.de/projects/ssara/) appears to be commonly recommended on places like /r/ProgrammingLanguages, /r/compilers, and Hacker News to people trying to implement register allocation when writing their compilers.
 SSA register allocation seems to have a lot of advantages over traditional register allocation strategies. It decouples spilling from register allocation, which results in a cleaner codebase and the ability to use different register allocation algorithms, like preference-based or PBQP, with the same spilling phase. Both spilling and preference-based register allocation can be done with a fixed number of passes, which can potentially result in faster compile times than graph coloring. And the spilling phase is guaranteed to give the minimum spills to lower the maximum register pressure to K registers, instead of linear scan and graph coloring which use heuristics for spilling which can result in unnecessary spills. Both the spilling and the register allocation are performed directly on the SSA form without the need to add another pass to destruct SSA for linear scan or graph coloring (although certain linear scan algorithms can be performed directly on SSA as well). And finally, after skimming the papers for spilling and preference-based register allocation, it seems simple to implement at first glance. However, there are essentially no major compilers that make use of SSA register allocation outside of the reference implementation in the [libfirm](https://github.com/libfirm/libfirm) compiler. If SSA register allocation is so simple and gives so many benefits over existing methods, why haven't more compilers adopted it already?
 
-One reason could be that the paper for preference-based register allocation makes it seem simpler to implement than it actually is. The paper gives pseudocode for the parts of the register allocation that seem to be the most important like the parts around the preference heuristics and how they are used for coloring registers. What's left mostly unmentioned are the parts about enforcing register constraints before an instruction, parts about moving registers to the expected phi registers after a block, and the main coloring function that runs the given function `color_block` for each block in the graph. These parts end up being the most difficult to implement in practice.
+One reason could be that the paper for preference-based register allocation makes it seem simpler to implement than it actually is. The paper gives pseudocode for the parts of the register allocation that seem to be the most important like the parts around the preference heuristics and how they are used for coloring registers. What's left mostly unmentioned are the parts about enforcing register constraints before an instruction, parts about moving registers to the expected phi registers after a block, and the main coloring function that runs the given function `color_block` for each block in the graph. From my experience implementing SSA register allocation in my compiler backend, these parts end up being the most difficult to implement in practice.
+
+Permutation vs Parallel copies
+------------------------------
+
+A key thing to consider when implementing SSA register allocation is the difference between a permutation and a parallel copy. The `implement_phi_copies` and `enforce_constraints` functions in the register allocation pseudocode insert a register permutation into the control flow graph, not a parallel copy. Parallel copies are not allowed to have multiple duplicate destination registers. .... A permutation
+in the context of SSA register allocation is
+a sequence of register moves and swaps that.
 
 * implement_phi_copies has to make a permutation
 * permutation != parallel copy, can have multiple duplicate destinations
@@ -37,3 +44,6 @@ and they can join together by having edges to the same successor block.
 * when starting coloring a block, look at live vales in predecessors and if their registers differ, *create phi nodes on the fly*.
 * blocks are not walked in execution order so when
 coloring blocks, `occupied`, `reg_current_var`, and `reg_current_pref` have to be saved and reloaded.
+* optimistic moves
+  - don't use optimistic moves for coloring phi nodes since you can't insert an instruction behind one without creating an invalid graph. with block arguments it gets inserted after the phi node which is just as bad.
+  - don't allow optimistic moves to a register that has been colored by a use in the same instruction. a move can't be inserted between operands of an instruction.
